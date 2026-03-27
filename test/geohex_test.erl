@@ -31,12 +31,12 @@ display_parse_round_trip_test() ->
     lists:foreach(
       fun(Code) ->
           Full = geohex:display(Code),
-          ?assertEqual(10, length(Full)),
+          ?assertEqual(10, byte_size(Full)),
           ?assertEqual(Code, geohex:parse(Full)),
-          ?assertEqual(8, length(geohex:display(Code, 4))),
-          ?assertEqual(6, length(geohex:display(Code, 3))),
-          ?assertEqual(4, length(geohex:display(Code, 2))),
-          ?assertEqual(2, length(geohex:display(Code, 1)))
+          ?assertEqual(8, byte_size(geohex:display(Code, 4))),
+          ?assertEqual(6, byte_size(geohex:display(Code, 3))),
+          ?assertEqual(4, byte_size(geohex:display(Code, 2))),
+          ?assertEqual(2, byte_size(geohex:display(Code, 1)))
       end,
       Codes).
 
@@ -47,10 +47,10 @@ display_prefix_property_test() ->
     S3 = geohex:display(Code, 3),
     S4 = geohex:display(Code, 4),
     S5 = geohex:display(Code, 5),
-    ?assertEqual(true, lists:prefix(S1, S2)),
-    ?assertEqual(true, lists:prefix(S2, S3)),
-    ?assertEqual(true, lists:prefix(S3, S4)),
-    ?assertEqual(true, lists:prefix(S4, S5)).
+    ?assertEqual(true, binary_prefix(S1, S2)),
+    ?assertEqual(true, binary_prefix(S2, S3)),
+    ?assertEqual(true, binary_prefix(S3, S4)),
+    ?assertEqual(true, binary_prefix(S4, S5)).
 
 coarsen_consistency_test() ->
     Code = geohex:encode(52.3026, 4.6889),
@@ -98,3 +98,7 @@ cell_bounds_sanity_test() ->
     ?assert(MaxLon > CLon),
     ?assert(MaxLat > MinLat),
     ?assert(MaxLon > MinLon).
+
+binary_prefix(Prefix, Binary) ->
+    Len = byte_size(Prefix),
+    byte_size(Binary) >= Len andalso binary:part(Binary, 0, Len) =:= Prefix.

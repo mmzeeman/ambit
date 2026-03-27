@@ -31,9 +31,9 @@
 %%   Code  = geohex:encode(52.3026, 4.6889).
 %%   true  = geohex:are_nearby(Code, Other, 4).  %% same ~660m cell?
 %%   Nbrs  = geohex:neighbors(Code).
-%%   S     = geohex:display(Code).               %% "3011336450"
-%%   S4    = geohex:display(Code, 4).            %% "30113364"
-%%   Code2 = geohex:parse("3011336450").
+%%   S     = geohex:display(Code).               %% <<"3011336450">>
+%%   S4    = geohex:display(Code, 4).            %% <<"30113364">>
+%%   Code2 = geohex:parse(<<"3011336450">>).
 
 -module(geohex).
 
@@ -145,32 +145,35 @@ cell_bounds(Code) ->
     {CLat - HalfLat, CLon - HalfLon,
      CLat + HalfLat, CLon + HalfLon}.
 
-%% @doc Render a code as a human-readable base-7 string at its finest level.
-%% Produces a 10-character string: 5 Q digits + 5 R digits.
--spec display(code()) -> string().
+%% @doc Render a code as a human-readable base-7 binary at its finest level.
+%% Produces a 10-byte binary: 5 Q digits + 5 R digits.
+-spec display(code()) -> binary().
 display(Code) -> display(Code, 5).
 
 %% @doc Render a code at the given level.
-%%   display(Code, 5) -> "3011336450"   (10 chars)
-%%   display(Code, 4) -> "30113364"     ( 8 chars)
-%%   display(Code, 3) -> "301336"       ( 6 chars)
-%%   display(Code, 2) -> "3033"         ( 4 chars)
-%%   display(Code, 1) -> "33"           ( 2 chars)
+%%   display(Code, 5) -> <<"3011336450">>   (10 bytes)
+%%   display(Code, 4) -> <<"30113364">>     ( 8 bytes)
+%%   display(Code, 3) -> <<"301336">>       ( 6 bytes)
+%%   display(Code, 2) -> <<"3033">>         ( 4 bytes)
+%%   display(Code, 1) -> <<"33">>           ( 2 bytes)
 %%
 %% Prefix property: display(Code, L) is always a prefix of display(Code, L+1).
--spec display(code(), level()) -> string().
+-spec display(code(), level()) -> binary().
 display({Q, R}, Level) ->
     Div = pow7(5 - Level),
     ND  = Level,
-    pad7(integer_to_list(Q div Div, 7), ND) ++ pad7(integer_to_list(R div Div, 7), ND).
+    QBin = pad7(integer_to_binary(Q div Div, 7), ND),
+    RBin = pad7(integer_to_binary(R div Div, 7), ND),
+    <<QBin/binary, RBin/binary>>.
 
-%% @doc Parse a display string back into a level-5 {Q, R} code.
-%% Accepts 2-, 4-, 6-, 8- or 10-character base-7 strings.
--spec parse(string()) -> code().
+%% @doc Parse a display binary back into a level-5 {Q, R} code.
+%% Accepts 2-, 4-, 6-, 8- or 10-byte base-7 binaries.
+-spec parse(binary()) -> code().
 parse(S) ->
-    ND  = length(S) div 2,
-    Q   = list_to_integer(lists:sublist(S, 1, ND), 7),
-    R   = list_to_integer(lists:sublist(S, ND + 1, ND), 7),
+    ND  = byte_size(S) div 2,
+    <<QBin:ND/binary, RBin:ND/binary>> = S,
+    Q   = binary_to_integer(QBin, 7),
+    R   = binary_to_integer(RBin, 7),
     Div = pow7(5 - ND),
     {Q * Div, R * Div}.
 
@@ -223,8 +226,9 @@ pow7(2) -> 49;
 pow7(3) -> 343;
 pow7(4) -> 2401.
 
--spec pad7(string(), pos_integer()) -> string().
+-spec pad7(binary(), pos_integer()) -> binary().
 pad7(S, Width) ->
-    lists:duplicate(max(0, Width - length(S)), $0) ++ S.
+    Padding = binary:copy(<<"0">>, max(0, Width - byte_size(S))),
+    <<Padding/binary, S/binary>>.
 
 
