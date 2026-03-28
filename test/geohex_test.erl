@@ -16,8 +16,8 @@ encode_decode_round_trip_test() ->
           {Lat2, Lon2} = geohex:decode(Code),
           ?assert(is_integer(element(1, Code))),
           ?assert(is_integer(element(2, Code))),
-          ?assert(abs(Lat - Lat2) < 0.01),
-          ?assert(abs(Lon - Lon2) < 0.01)
+          ?assert(abs(Lat - Lat2) < 0.0001),
+          ?assert(abs(Lon - Lon2) < 0.0001)
       end,
       Points).
 
@@ -29,45 +29,43 @@ display_parse_round_trip_test() ->
     lists:foreach(
       fun(Code) ->
           Full = geohex:display(Code),
-          ?assertEqual(7, byte_size(Full)),
+          ?assertEqual(12, byte_size(Full)),
           ?assertEqual(Code, geohex:parse(Full)),
-          ?assertEqual(6, byte_size(geohex:display(Code, 6))),
-          ?assertEqual(5, byte_size(geohex:display(Code, 5))),
-          ?assertEqual(4, byte_size(geohex:display(Code, 4))),
+          ?assertEqual(9, byte_size(geohex:display(Code, 18))),
+          ?assertEqual(9, byte_size(geohex:display(Code, 17))),
+          ?assertEqual(8, byte_size(geohex:display(Code, 16))),
           ?assertEqual(1, byte_size(geohex:display(Code, 1)))
       end,
       Codes).
 
 display_prefix_property_test() ->
     Code = geohex:encode(52.3026, 4.6889),
-    S1 = geohex:display(Code, 1),
-    S4 = geohex:display(Code, 4),
-    S6 = geohex:display(Code, 6),
-    S7 = geohex:display(Code, 7),
+    %% In Base-16 (Hex), prefixes only hold for EVEN levels.
+    S16 = geohex:display(Code, 16),
+    S18 = geohex:display(Code, 18),
+    S24 = geohex:display(Code, 24),
 
-    %% In Base-49, each character represents one level exactly.
-    ?assert(binary_prefix(S1, S4)),
-    ?assert(binary_prefix(S4, S6)),
-    ?assert(binary_prefix(S6, S7)).
+    ?assert(binary_prefix(S16, S18)),
+    ?assert(binary_prefix(S18, S24)).
 
 coarsen_consistency_test() ->
     Code = geohex:encode(52.3026, 4.6889),
-    ?assertEqual(Code, geohex:coarsen(Code, 7)),
-    %% parse(display(Code, L)) returns the level-7 coordinate of the cell's start.
-    ?assertEqual(geohex:coarsen(Code, 6), geohex:coarsen(geohex:parse(geohex:display(Code, 6)), 6)),
-    ?assertEqual(geohex:coarsen(Code, 4), geohex:coarsen(geohex:parse(geohex:display(Code, 4)), 4)),
-    ?assertEqual(geohex:coarsen(Code, 1), geohex:coarsen(geohex:parse(geohex:display(Code, 1)), 1)).
+    ?assertEqual(Code, geohex:coarsen(Code, 24)),
+    %% Canonical test: parse(display(Code, L)) should be the same as coarsen(Code, L)
+    %% because they both represent the same cell ID in the hierarchy.
+    ?assertEqual(geohex:coarsen(Code, 18), geohex:coarsen(geohex:parse(geohex:display(Code, 18)), 18)),
+    ?assertEqual(geohex:coarsen(Code, 17), geohex:coarsen(geohex:parse(geohex:display(Code, 17)), 17)),
+    ?assertEqual(geohex:coarsen(Code, 16), geohex:coarsen(geohex:parse(geohex:display(Code, 16)), 16)).
 
 are_nearby_test() ->
     Code = geohex:encode(52.3026, 4.6889),
-    SameCell = geohex:encode(52.3027, 4.6890),
-    DifferentButNearby = geohex:encode(52.3040, 4.6910),
+    SameCell = geohex:encode(52.302601, 4.688901),
+    DifferentButNearby = geohex:encode(52.3035, 4.6895),
 
-    ?assert(geohex:are_nearby(Code, SameCell, 7)),
-    ?assert(geohex:are_nearby(Code, SameCell, 6)),
-    ?assertNot(geohex:are_nearby(Code, DifferentButNearby, 7)),
-    %% At level 4 (city scale), they should definitely be in the same cell.
-    ?assert(geohex:are_nearby(Code, DifferentButNearby, 4)).
+    ?assert(geohex:are_nearby(Code, SameCell, 24)),
+    ?assert(geohex:are_nearby(Code, SameCell, 18)),
+    ?assertNot(geohex:are_nearby(Code, DifferentButNearby, 24)),
+    ?assert(geohex:are_nearby(Code, DifferentButNearby, 16)).
 
 neighbors_test() ->
     Code = geohex:encode(52.3026, 4.6889),
