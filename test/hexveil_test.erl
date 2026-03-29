@@ -24,7 +24,7 @@ display_parse_round_trip_test() ->
     Binary = hexveil:display(Digits),
     ?assertEqual(14, byte_size(Binary)),
     %% Parsing now returns EXACT digits because of the sentinel bit
-    ?assertEqual(Digits, hexveil_v3:parse(Binary)).
+    ?assertEqual(Digits, hexveil:parse(Binary)).
 
           prefix_property_test() ->
           Digits = hexveil:encode(52.3616, 4.8784),
@@ -39,8 +39,8 @@ display_parse_round_trip_test() ->
 
 hierarchy_containment_test() ->
     %% Null Island is perfectly linear in our projection (CosLat = 1.0)
-    ParentDigits = lists:sublist(hexveil_v3:encode(0.0, 0.0), 30),
-    {PLat, PLon} = hexveil_v3:decode(ParentDigits),
+    ParentDigits = lists:sublist(hexveil:encode(0.0, 0.0), 30),
+    {PLat, PLon} = hexveil:decode(ParentDigits),
 
     %% Children of this parent
     C0 = ParentDigits ++ [0],
