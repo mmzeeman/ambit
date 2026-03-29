@@ -12,7 +12,7 @@ encode_decode_round_trip_test() ->
     lists:foreach(
       fun({Lat, Lon}) ->
           Digits = hexveil:encode(Lat, Lon),
-          ?assertEqual(40, length(Digits)),
+          ?assertEqual(40, byte_size(Digits)),
           {Lat2, Lon2} = hexveil:decode(Digits),
           ?assert(abs(Lat - Lat2) < 0.0001),
           ?assert(abs(Lon - Lon2) < 0.0001)
@@ -39,13 +39,13 @@ display_parse_round_trip_test() ->
 
 hierarchy_containment_test() ->
     %% Null Island is perfectly linear in our projection (CosLat = 1.0)
-    ParentDigits = lists:sublist(hexveil:encode(0.0, 0.0), 30),
+    ParentDigits = binary:part(hexveil:encode(0.0, 0.0), 0, 30),
     {PLat, PLon} = hexveil:decode(ParentDigits),
 
     %% Children of this parent
-    C0 = ParentDigits ++ [0],
-    C1 = ParentDigits ++ [1],
-    C2 = ParentDigits ++ [2],
+    C0 = <<ParentDigits/binary, 0>>,
+    C1 = <<ParentDigits/binary, 1>>,
+    C2 = <<ParentDigits/binary, 2>>,
 
     {Lat0, Lon0} = hexveil:decode(C0),
     {Lat1, Lon1} = hexveil:decode(C1),

@@ -43,23 +43,23 @@
 -define(R_OFF, 1000000000).
 -define(DIRECTIONS, [{1,0},{0,1},{-1,1},{-1,0},{0,-1},{1,-1}]).
 
-%% ---------------------------------------------------------------------------
-%% Public API
-%% ---------------------------------------------------------------------------
+%%
+%% API
+%%
 
 %% @doc Encode Lat/Lon to a hierarchical ternary code.
 encode(Lat, Lon) ->
     {X, Y}   = latlon_to_xy(Lat, Lon),
     {Qf, Rf} = xy_to_axial(X, Y),
     {Q,  R}  = hex_round(Qf, Rf),
-    extract_digits(Q + ?Q_OFF, R + ?R_OFF, ?MAX_LEVEL, []).
+
+    extract_digits(Q + ?Q_OFF, R + ?R_OFF, ?MAX_LEVEL, <<>>).
 
 %% @doc Decode a list of digits to {Lat, Lon} center.
 decode(Digits) ->
-    Level = length(Digits),
-    {Q, R} = digits_to_axial(lists:sublist(Digits, Level)),
+    {Q, R} = digits_to_axial(Digits),
     %% Scale to the coordinate system of MAX_LEVEL.
-    {SQ, SR} = scale_up(Q - 1/3, R + 2/3, ?MAX_LEVEL - Level),
+    {SQ, SR} = scale_up(Q - 1/3, R + 2/3, ?MAX_LEVEL - byte_size(Digits)),
     {X, Y} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     xy_to_latlon(X, Y).
 
@@ -68,12 +68,11 @@ scale_up(Q, R, L) when L > 0 ->
     scale_up(2*Q + R, -Q + R, L-1).
 
 coarsen(Digits, Level) ->
-    lists:sublist(Digits, Level).
+    binary:part(Digits, 0, Level).
 
 neighbors(Digits) ->
-    Level = length(Digits),
-    {Q, R} = digits_to_axial(lists:sublist(Digits, Level)),
-    [extract_digits(Q + DQ, R + DR, Level, []) || {DQ, DR} <- ?DIRECTIONS].
+    {Q, R} = digits_to_axial(Digits),
+    [extract_digits(Q + DQ, R + DR, byte_size(Digits), <<>>) || {DQ, DR} <- ?DIRECTIONS].
 
 %% @doc Convert digits to axial coordinates (relative to Null Island).
 to_axial(Digits) ->
@@ -82,10 +81,10 @@ to_axial(Digits) ->
 
 %% @doc Convert axial coordinates (relative to Null Island) to digits.
 from_axial(Q, R, Level) ->
-    extract_digits(Q + ?Q_OFF, R + ?R_OFF, Level, []).
+    extract_digits(Q + ?Q_OFF, R + ?R_OFF, Level, <<>>).
 
 cell_geometry(Digits) ->
-    Level = length(Digits),
+    Level = byte_size(Digits),
     {CLat, CLon} = decode(Digits),
     {CX, CY} = latlon_to_xy(CLat, CLon),
     Scale = math:pow(math:sqrt(3), ?MAX_LEVEL - Level),
@@ -98,9 +97,7 @@ cell_geometry(Digits) ->
      ) || A <- Angles].
 
 display(Digits) ->
-    Level = length(Digits),
-    Data = lists:sublist(Digits, Level),
-    group_base27(list_to_binary(Data ++ [1]), <<>>).
+    group_base27(<<Digits/binary, 1>>, <<>>).
 
 parse(Binary) ->
     strip_sentinel(ungroup_base27(Binary, <<>>)).
@@ -109,7 +106,7 @@ strip_sentinel(Binary) ->
     strip_sentinel(Binary, byte_size(Binary) - 1).
 strip_sentinel(Binary, Pos) ->
     case Binary of
-        <<Prefix:Pos/binary, 1>> -> binary_to_list(Prefix);
+        <<Prefix:Pos/binary, 1>> -> Prefix;
         <<Prefix:Pos/binary, 0>> -> strip_sentinel(Prefix, Pos - 1)
     end.
 
@@ -134,9 +131,9 @@ to_b27(V) -> $a + V - 10.
 from_b27(C) when C >= $0, C =< $9 -> C - $0;
 from_b27(C) -> C - $a + 10.
 
-%% ---------------------------------------------------------------------------
-%% Internal: Hierarchy
-%% ---------------------------------------------------------------------------
+%%
+%% Helpers: Hierarchy
+%%
 
 extract_digits(_Q, _R, 0, Acc) -> Acc;
 extract_digits(Q, R, L, Acc) ->
@@ -146,13 +143,16 @@ extract_digits(Q, R, L, Acc) ->
     NR = R - DR,
     PQ = (NQ - NR) div 3,
     PR = (NQ + 2*NR) div 3,
-    extract_digits(PQ, PR, L-1, [Digit | Acc]).
+    extract_digits(PQ, PR, L-1, <<Digit, Acc/binary>>).
 
 digits_to_axial(Digits) ->
-    lists:foldl(fun(Digit, {Q, R}) ->
-        {DQ, DR} = offset(Digit),
-        {2*Q + R + DQ, -Q + R + DR}
-    end, {0, -1}, Digits).
+    digits_to_axial(Digits, {0, -1}).
+
+digits_to_axial(<<Digit, Rest/binary>>, {Q, R}) ->
+    {DQ, DR} = offset(Digit),
+    digits_to_axial(Rest, {2*Q + R + DQ, -Q + R + DR});
+digits_to_axial(<<>>, Acc) ->
+    Acc.
 
 offset(0) -> {0, 0};
 offset(1) -> {1, 0};
@@ -161,9 +161,9 @@ offset(2) -> {0, 1}.
 mod3(X) when X >= 0 -> X rem 3;
 mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3.
 
-%% ---------------------------------------------------------------------------
-%% Internal: Geometry
-%% ---------------------------------------------------------------------------
+%%
+%% Helpers: Geometry
+%%
 
 latlon_to_xy(Lat, Lon) ->
     CosLat = math:cos(Lat * math:pi() / 180.0),
