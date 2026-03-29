@@ -148,8 +148,11 @@ ungroup_base27([Char | Rest], Acc) ->
     D3 = Val rem 3,
     ungroup_base27(Rest, [[D1, D2, D3] | Acc]).
 
-to_b27(V) -> hd(integer_to_list(V, 27)).
-from_b27(C) -> list_to_integer([C], 27).
+to_b27(V) when V < 10 -> $0 + V;
+to_b27(V) -> $a + V - 10.
+
+from_b27(C) when C >= $0, C =< $9 -> C - $0;
+from_b27(C) -> C - $a + 10.
 
 %% ---------------------------------------------------------------------------
 %% Internal: Hierarchy
