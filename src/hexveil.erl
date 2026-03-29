@@ -52,7 +52,6 @@ encode(Lat, Lon) ->
     {X, Y}   = latlon_to_xy(Lat, Lon),
     {Qf, Rf} = xy_to_axial(X, Y),
     {Q,  R}  = hex_round(Qf, Rf),
-
     extract_digits(Q + ?Q_OFF, R + ?R_OFF, ?MAX_LEVEL, <<>>).
 
 %% @doc Decode a list of digits to {Lat, Lon} center.
@@ -85,11 +84,12 @@ from_axial(Q, R, Level) ->
 
 cell_geometry(Digits) ->
     Level = byte_size(Digits),
-    {CLat, CLon} = decode(Digits),
-    {CX, CY} = latlon_to_xy(CLat, CLon),
-    Scale = math:pow(math:sqrt(3), ?MAX_LEVEL - Level),
-    Radius = ?R * Scale,
-    Rotation = (?MAX_LEVEL - Level) * (-30),
+    Diff = ?MAX_LEVEL - Level,
+    {Q, R} = digits_to_axial(Digits),
+    {SQ, SR} = scale_up(Q - 1/3, R + 2/3, Diff),
+    {CX, CY} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
+    Radius = ?R * math:pow(math:sqrt(3), Diff),
+    Rotation = Diff * (-30),
     Angles = [30, 90, 150, 210, 270, 330],
     [xy_to_latlon(
         CX + Radius * math:cos((A + Rotation) * math:pi() / 180),
@@ -104,10 +104,11 @@ parse(Binary) ->
 
 strip_sentinel(Binary) ->
     strip_sentinel(Binary, byte_size(Binary) - 1).
+
 strip_sentinel(Binary, Pos) ->
-    case Binary of
-        <<Prefix:Pos/binary, 1>> -> Prefix;
-        <<Prefix:Pos/binary, 0>> -> strip_sentinel(Prefix, Pos - 1)
+    case binary:at(Binary, Pos) of
+        1 -> binary:part(Binary, 0, Pos);
+        0 -> strip_sentinel(Binary, Pos - 1)
     end.
 
 group_base27(<<D1, D2, D3, Rest/binary>>, Acc) ->
