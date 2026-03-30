@@ -74,13 +74,14 @@ decode(Digits) ->
     {Q, R} = digits_to_axial(Digits),
     Diff = ?MAX_LEVEL - byte_size(Digits),
     %% Using a large multiplier for better precision in integer scale-up
-    {SQ, SR} = scale_up_precise(float(Q) - 1.0/3.0, float(R) + 2.0/3.0, Diff),
-    {X, Y} = axial_to_xy(SQ - float(?Q_OFF), SR - float(?R_OFF)),
+    {SQ, SR} = scale_up_precise(Q - 1 / 3, R + 2/3, Diff),
+    {X, Y} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     xy_to_latlon(X, Y).
 
-scale_up_precise(Q, R, 0) -> {Q, R};
+scale_up_precise(Q, R, 0) ->
+    {Q, R};
 scale_up_precise(Q, R, L) ->
-    scale_up_precise(2.0*Q + R, -Q + R, L-1).
+    scale_up_precise(2*Q + R, -Q + R, L-1).
 
 coarsen(Digits, Level) ->
     binary:part(Digits, 0, Level).
@@ -100,14 +101,14 @@ cell_geometry(Digits) ->
     Level = byte_size(Digits),
     Diff = ?MAX_LEVEL - Level,
     {Q, R} = digits_to_axial(Digits),
-    {SQ, SR} = scale_up_precise(float(Q) - 1.0/3.0, float(R) + 2.0/3.0, Diff),
-    {CX, CY} = axial_to_xy(SQ - float(?Q_OFF), SR - float(?R_OFF)),
-    Radius = ?R * math:pow(math:sqrt(3), float(Diff)),
-    Rotation = float(Diff) * (-30.0),
+    {SQ, SR} = scale_up_precise(Q - 1/3, R + 2/3, Diff),
+    {CX, CY} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
+    Radius = ?R * math:pow(math:sqrt(3), Diff),
+    Rotation = Diff * -30,
     Angles = [30, 90, 150, 210, 270, 330],
     [xy_to_latlon(
-        CX + Radius * math:cos((float(A) + Rotation) * math:pi() / 180.0),
-        CY + Radius * math:sin((float(A) + Rotation) * math:pi() / 180.0)
+        CX + Radius * math:cos((A + Rotation) * math:pi() / 180),
+        CY + Radius * math:sin((A + Rotation) * math:pi() / 180)
      ) || A <- Angles].
 
 display(Digits) ->
@@ -181,13 +182,13 @@ mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3.
 %%
 
 latlon_to_xy(Lat, Lon) ->
-    CosLat = math:cos(Lat * math:pi() / 180.0),
+    CosLat = math:cos(Lat * math:pi() / 180),
     {Lon * ?M_PER_DEG_LAT * CosLat, Lat * ?M_PER_DEG_LAT}.
 
 xy_to_latlon(X, Y) ->
     Lat = Y / ?M_PER_DEG_LAT,
     %% erlang:max instead of math:max
-    CosLat = erlang:max(0.000001, math:cos(Lat * math:pi() / 180.0)),
+    CosLat = erlang:max(0.000001, math:cos(Lat * math:pi() / 180)),
     {Lat, X / (?M_PER_DEG_LAT * CosLat)}.
 
 xy_to_axial(X, Y) ->
