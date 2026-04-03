@@ -72,7 +72,7 @@ decode(Digits) ->
     {Q, R} = digits_to_axial(Digits),
     Diff = ?MAX_LEVEL - byte_size(Digits),
     %% Using a large multiplier for better precision in integer scale-up
-    {SQ, SR} = scale_up_precise(Q - 1 / 3, R + 2/3, Diff),
+    {SQ, SR} = scale_up_precise(Q, R, Diff),
     {X, Y} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     xy_to_latlon(X, Y).
 
@@ -99,7 +99,7 @@ cell_geometry(Digits) ->
     Level = byte_size(Digits),
     Diff = ?MAX_LEVEL - Level,
     {Q, R} = digits_to_axial(Digits),
-    {SQ, SR} = scale_up_precise(Q - 1/3, R + 2/3, Diff),
+    {SQ, SR} = scale_up_precise(Q, R, Diff),
     {CX, CY} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     Radius = ?R * math:pow(math:sqrt(3), Diff),
     Rotation = Diff * -30,
