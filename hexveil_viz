@@ -1,0 +1,70 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -pa _build/default/lib/hexveil/ebin
+
+main([LevelStr, MinLatStr, MinLonStr, MaxLatStr, MaxLonStr]) ->
+    Level = list_to_integer(LevelStr),
+    MinLat = list_to_float(MinLatStr),
+    MinLon = list_to_float(MinLonStr),
+    MaxLat = list_to_float(MaxLatStr),
+    MaxLon = list_to_float(MaxLonStr),
+    generate_grid(Level, MinLat, MinLon, MaxLat, MaxLon);
+main(_) ->
+    io:format("Usage: ./hexveil_viz <level> <min_lat> <min_lon> <max_lat> <max_lon>~n"),
+    io:format("Example: ./hexveil_viz 17 52.355 4.870 52.375 4.900~n").
+
+generate_grid(Level, MinLat, MinLon, MaxLat, MaxLon) ->
+    {Q1, R1} = hexveil:encode(MinLat, MinLon),
+    {Q2, R2} = hexveil:encode(MaxLat, MaxLon),
+    
+    Shift = 24 - Level,
+    Qs = lists:seq(min(Q1, Q2) bsr Shift, max(Q1, Q2) bsr Shift),
+    Rs = lists:seq(min(R1, R2) bsr Shift, max(R1, R2) bsr Shift),
+    
+    Polygons1 = [begin 
+                    Corners = hexveil:cell_geometry({Q bsl Shift, R bsl Shift}, Level-2),
+                    [[Lat, Lon] || {Lat, Lon} <- Corners]
+                end || Q <- Qs, R <- Rs],
+
+    Polygons2 = [begin 
+                    Corners = hexveil:cell_geometry({Q bsl Shift, R bsl Shift}, Level-1),
+                    [[Lat, Lon] || {Lat, Lon} <- Corners]
+                end || Q <- Qs, R <- Rs],
+
+    Polygons3 = [begin 
+                    Corners = hexveil:cell_geometry({Q bsl Shift, R bsl Shift}, Level),
+                    [[Lat, Lon] || {Lat, Lon} <- Corners]
+                end || Q <- Qs, R <- Rs],
+    
+
+    Data1 = lists:flatten(io_lib:format("~p", [Polygons1])),
+    Data2 = lists:flatten(io_lib:format("~p", [Polygons2])),
+    Data3 = lists:flatten(io_lib:format("~p", [Polygons3])),
+    CenterLat = MinLat + (MaxLat - MinLat) / 2,
+    CenterLon = MinLon + (MaxLon - MinLon) / 2,
+    
+    Html = io_lib:format("
+<!DOCTYPE html>
+<html><head>
+<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" />
+<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
+<style>
+#map { height: 100vh; margin: 0; }
+</style>
+</head>
+<body>
+<div id=\"map\"></div>
+<script>
+var map = L.map(\"map\").setView([~f, ~f], 14);
+L.tileLayer(\"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png\").addTo(map);
+var data1 = ~s;
+var data2 = ~s;
+var data3 = ~s;
+data1.forEach(p => L.polygon(p, {color: \"blue\", weight: 3, fillOpacity: 0}).addTo(map));
+data2.forEach(p => L.polygon(p, {color: \"blue\", weight: 2, fillOpacity: 0}).addTo(map));
+data3.forEach(p => L.polygon(p, {color: \"blue\", weight: 1, fillOpacity: 0}).addTo(map));
+</script></body></html>", [CenterLat, CenterLon, Data1, Data2, Data3]),
+    
+    FileName = "grid.html",
+    file:write_file(FileName, Html),
+    io:format("Generated ~s with ~p polygons.~n", [FileName, length(Polygons1) + length(Polygons2) + length(Polygons3)]).

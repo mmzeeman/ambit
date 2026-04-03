@@ -44,11 +44,11 @@
 ]).
 
 -define(MAX_LEVEL, 32).
--define(R, 1.7320508075688772).      %% 3.0 / sqrt(3)
+
 -define(BQ_X, 3.0).
 -define(BR_X, 1.5).
 -define(BR_Y, 2.598076211353316).    %% 1.5 * sqrt(3)
--define(M_PER_DEG_LAT, 111319.49079327357).
+-define(R, 1.7320508075688772).      %% 3.0 / sqrt(3)
 
 %% Offset to bring Earth into the domain of root {1, -2}.
 -define(Q_OFF, 20_000_000).
@@ -56,17 +56,15 @@
 -define(ROOT, {1, -2}).
 -define(DIRECTIONS, [{1,0},{0,1},{-1,1},{-1,0},{0,-1},{1,-1}]).
 
-
-
 %%
 %% API
 %%
 
 %% @doc Encode Lat/Lon to a hierarchical ternary code.
 encode(Lat, Lon) ->
-    {X, Y}   = latlon_to_xy(Lat, Lon),
+    {X, Y} = latlon_to_xy(Lat, Lon),
     {Qf, Rf} = xy_to_axial(X, Y),
-    {Q,  R}  = hex_round(Qf, Rf),
+    {Q,  R} = hex_round(Qf, Rf),
     extract_digits(Q + ?Q_OFF, R + ?R_OFF, ?MAX_LEVEL, <<>>).
 
 %% @doc Decode a list of digits to {Lat, Lon} center.
@@ -74,7 +72,7 @@ decode(Digits) ->
     {Q, R} = digits_to_axial(Digits),
     Diff = ?MAX_LEVEL - byte_size(Digits),
     %% Using a large multiplier for better precision in integer scale-up
-    {SQ, SR} = scale_up_precise(Q - 1 / 3, R + 2/3, Diff),
+    {SQ, SR} = scale_up_precise(Q, R, Diff),
     {X, Y} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     xy_to_latlon(X, Y).
 
@@ -101,7 +99,7 @@ cell_geometry(Digits) ->
     Level = byte_size(Digits),
     Diff = ?MAX_LEVEL - Level,
     {Q, R} = digits_to_axial(Digits),
-    {SQ, SR} = scale_up_precise(Q - 1/3, R + 2/3, Diff),
+    {SQ, SR} = scale_up_precise(Q, R, Diff),
     {CX, CY} = axial_to_xy(SQ - ?Q_OFF, SR - ?R_OFF),
     Radius = ?R * math:pow(math:sqrt(3), Diff),
     Rotation = Diff * -30,
@@ -182,14 +180,10 @@ mod3(X) when X < 0 -> ((X rem 3) + 3) rem 3.
 %%
 
 latlon_to_xy(Lat, Lon) ->
-    CosLat = math:cos(Lat * math:pi() / 180),
-    {Lon * ?M_PER_DEG_LAT * CosLat, Lat * ?M_PER_DEG_LAT}.
+    hex_proj_laea:latlon_to_xy(Lat, Lon).
 
 xy_to_latlon(X, Y) ->
-    Lat = Y / ?M_PER_DEG_LAT,
-    %% erlang:max instead of math:max
-    CosLat = erlang:max(0.000001, math:cos(Lat * math:pi() / 180)),
-    {Lat, X / (?M_PER_DEG_LAT * CosLat)}.
+    hex_proj_laea:xy_to_latlon(X, Y).
 
 xy_to_axial(X, Y) ->
     Rf = Y / ?BR_Y,
@@ -199,12 +193,29 @@ xy_to_axial(X, Y) ->
 axial_to_xy(Q, R) ->
     {?BQ_X * Q + ?BR_X * R, ?BR_Y * R}.
 
-hex_round(Qf, Rf) ->
-    Sf = -Qf - Rf,
-    Rq = round(Qf), Rr = round(Rf), Rs = round(Sf),
-    Dq = abs(Rq - Qf), Dr = abs(Rr - Rf), Ds = abs(Rs - Sf),
-    if
-        Dq > Dr andalso Dq > Ds -> {-Rr - Rs, Rr};
-        Dr > Ds                  -> {Rq, -Rq - Rs};
-        true                     -> {Rq, Rr}
+hex_round(Qf, Rf)
+  when is_number(Qf), is_number(Rf) ->
+    Xf = Qf,
+    Zf = Rf,
+    Yf = -Xf - Zf,
+
+    Q = erlang:round(Qf),
+    R = erlang:round(Rf),
+    X = Q,
+    Z = R,
+    Y = -X - Z,
+
+    Dx = abs(Xf - X),
+    Dy = abs(Yf - Y),
+    Dz = abs(Zf - Z),
+
+    if Dx > Dy, Dx > Dz ->
+           {-Y - Z, Z}; %% Adjust Q
+       Dy > Dz ->
+           {X, Z};      %% Adjust S, keep Q and R
+       true ->
+           {X, -X - Y}  %% Adjust R
     end.
+
+
+
