@@ -14,10 +14,13 @@
 -define(BASE_SCALE, 2.0).
 -define(NR_FACES, 20).
 
+-define(DIRS, [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}]).
+
+
 encode(Coord) ->
     encode(Coord, 7).
 
-encode({Lat, Lon}, Res) when Res >= 1, Res =< 12 ->
+encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
     XYZ = to_xyz({Lat, Lon}),
     Face = nearest_face(XYZ),
     Axial = project(XYZ, Face),
@@ -46,21 +49,11 @@ parent(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
             Code
     end.
 
-%neighbors(Code) when is_binary(Code) -> neighbors(binary_to_list(Code));
-%neighbors(Code) ->
-%    [FaceStr, Digits] = string:split(Code, "-"),
-%    Face = list_to_integer(FaceStr),
-%    Res  = length(Digits),
-%    {QG, RG} = from_digits(Digits, Res),
-%    Dirs = [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}],
-%    [to_code(Face, {QG+DQ, RG+DR}, Res) || {DQ, DR} <- Dirs].
-
 neighbors(<<FaceBin:1/binary, $-, Digits/binary>>) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),
     Res = byte_size(Digits),
     {QG, RG} = from_digits(Digits, Res),
 
-    Dirs = [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}],
     Scale = ?BASE_SCALE / math:pow(2.0, Res),
     [begin
          QG2 = QG + DQ,
@@ -74,7 +67,7 @@ neighbors(<<FaceBin:1/binary, $-, Digits/binary>>) ->
          FaceOut = integer_to_binary(NewFace, ?NR_FACES),
          ND = to_digits(SnappedAxial, Res),
          <<FaceOut/binary, $-, ND/binary>>
-     end || {DQ, DR} <- Dirs].
+     end || {DQ, DR} <- ?DIRS].
 
 %% --- sphere geometry ---
 

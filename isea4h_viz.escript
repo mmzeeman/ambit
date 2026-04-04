@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa ebin/
+%%! -pa _build/default/lib/hexveil/ebin
 
 main([LatStr, LonStr, ResStr]) ->
     Lat = list_to_float(LatStr),
@@ -113,4 +113,4 @@ zoom_level(Res) when Res < 3 -> 3;
 zoom_level(Res) when Res < 5 -> 6;
 zoom_level(Res) when Res < 7 -> 9;
 zoom_level(Res) when Res < 9 -> 12;
-zoom_level(Res) -> 15.
+zoom_level(_Res) -> 15.
