@@ -83,7 +83,7 @@ compute_neighbors(<<FaceBin:1/binary, $-, Digits/binary>>, Dirs) ->
     CellAxial = from_digits(Digits, Res),
     Scale = scale(Res),
     [begin
-         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
+         Cartesian = axial_to_cartesian(plus(CellAxial, Delta), Scale),
          XYZ = unproject(Cartesian, Face),
          NewFace = nearest_face(XYZ),
          Axial = project(XYZ, NewFace),
@@ -109,7 +109,7 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
                     ],                                               
                                                     
     [begin
-        Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
+        Cartesian = axial_to_cartesian(plus(CellAxial, Delta), Scale),
         Snapped = snap_to_face(Cartesian, Normals, Scale),
         from_xyz(unproject(Snapped, Face))
      end || Delta <- CornerOffsets].
@@ -134,16 +134,20 @@ face_edge_normals(Face) -> % 5..14
 %% ensures hexagons on both sides of a face boundary have their
 %% edge-facing corners on the shared icosahedron edge, eliminating gaps.
 snap_to_face(P, Normals, Scale) ->
-    lists:foldl(fun(N, Acc) -> snap_edge(Acc, N, Scale) end, P, Normals).
+    lists:foldl(fun(N, Acc) ->
+                        snap_edge(Acc, N, Scale)
+                end,
+                P,
+                Normals).
 
-snap_edge({Px, Py}, {Nx, Ny}, Scale) ->
-    Dot = Px * Nx + Py * Ny,
+snap_edge(A, Normal, Scale) ->
+    Dot = dot(A, Normal),
     case Dot > ?FACE_INRADIUS - Scale of
         true ->
             Excess = Dot - ?FACE_INRADIUS,
-            {Px - Excess * Nx, Py - Excess * Ny};
+            sub(A, scale(Excess, Normal));
         false ->
-            {Px, Py}
+            A
     end.
 
 %% --- sphere geometry ---
@@ -303,5 +307,14 @@ cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
      Az*Bx - Ax*Bz,
      Ax*By - Ay*Bx}.
 
-vadd({E1, E2}, {F1, F2}) ->
+plus({E1, E2}, {F1, F2}) ->
     {E1 + F1, E2 + F2}.
+
+dot({Ax, Ay}, {Bx, By}) ->
+    Ax * Bx + Ay * By.
+
+scale(S, {X, Y}) ->
+    {S * X, S * Y}.
+
+sub({Ax, Ay}, {Bx, By}) ->
+    {Ax - Bx, Ay - By}.
