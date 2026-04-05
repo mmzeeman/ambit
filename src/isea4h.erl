@@ -1,12 +1,12 @@
-%% @doc ISEA4H - Icosahedral Snyder Equal Area Aperture 4 Hexagon.
+%% @doc ISEA4H - Icosahedral Gnomonic Aperture 4 Hexagon.
 %%
 %% This implementation uses an Aperture 4 hierarchy (Area x 4 per level)
-%% on an icosahedral projection. It provides a Discrete Global Grid System
-%% (DGGS) with equal-area properties.
+%% on an icosahedral gnomonic projection. This projection is used for
+%% computational efficiency at the cost of being only approximately equal-area.
 %%
 %% Characteristics:
 %% - Icosahedral projection (20 faces).
-%% - Snyder Equal Area projection.
+%% - Gnomonic projection (central projection from sphere center to face).
 %% - Aperture 4 (each level divides cell area by 4).
 %% - Scale factor: 2.0 per level (edge length).
 %% - Cell sizes (approximate diameter):
