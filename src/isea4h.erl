@@ -17,6 +17,26 @@
 -define(BASE_SCALE, 2.0).
 -define(NR_FACES, 20).
 
+%% Inradius of the gnomonic face triangle (distance from centre to each edge).
+%% All 20 faces project to equilateral triangles with circumradius R ≈ 0.7640
+%% and inradius r = R/2 ≈ 0.3820.  Equivalently, this is the Y-coordinate
+%% at which the icosahedron vertices project onto the flat (bottom/top) edge.
+-define(FACE_INRADIUS, 0.3819660112501052).
+
+%% Outward edge normals for the two triangle orientations.
+%%
+%% The 20 gnomonic face triangles come in two orientations:
+%%   Type A (upward, apex at bottom): faces 0-4, 6, 8, 10, 12, 14.
+%%     Edges: right  (√3/2, -½), bottom (0, 1), left (-√3/2, -½).
+%%   Type B (downward, apex at top):  faces 5, 7, 9, 11, 13, 15-19.
+%%     Edges: right  (√3/2,  ½), left  (-√3/2,  ½), top (0, -1).
+%%
+%% Faces 0-4 share the north-pole vertex (ico vertex 0), faces 15-19 share
+%% the south-pole vertex (ico vertex 11).  Faces 5-14 alternate: even
+%% indices are Type A (upward mid-ring), odd indices are Type B (downward).
+-define(FACE_NORMALS_A, [{?SQRT3_OVER_2, -0.5}, {0.0, 1.0}, {-?SQRT3_OVER_2, -0.5}]).
+-define(FACE_NORMALS_B, [{?SQRT3_OVER_2, 0.5}, {-?SQRT3_OVER_2, 0.5}, {0.0, -1.0}]).
+
 -define(DIRS, [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}]).
 -define(DIRS2, [                                       
       {2,0}, {-2,0}, {0,2}, {0,-2}, {2,-2}, {-2,2}, 
@@ -79,8 +99,9 @@ cell_geometry(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
 cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) -> 
     Face = binary_to_integer(FaceBin, ?NR_FACES),                     
     CellAxial = from_digits(DigitsBin, byte_size(DigitsBin)),         
-    Scale = scale(Res),              
-                                                          
+    Scale = scale(Res),
+    Normals = face_edge_normals(Face),
+
     S = 1.0 / 3.0,                                       
     CornerOffsets = [                                   
                      {2*S, -S}, {S, S}, {-S, 2*S},                  
@@ -89,20 +110,41 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
                                                     
     [begin
         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
-        XYZ = unproject(Cartesian, Face),
-        Nearest = nearest_face(XYZ),
-        CanonFace = min(Face, Nearest),
-        FinalXYZ = case CanonFace =:= Face of
-                       true ->
-                           XYZ;
-                       false ->
-                           %% Corner lies over a neighbouring face.
-                           %% Normalise through that face's gnomonic plane so
-                           %% that adjacent cells produce identical shared vertices.
-                           unproject(project(XYZ, CanonFace), CanonFace)
-                   end,      
-        from_xyz(FinalXYZ) 
+        Snapped = snap_to_face(Cartesian, Normals, Scale),
+        from_xyz(unproject(Snapped, Face))
      end || Delta <- CornerOffsets].
+
+%% --- face edge clamping ---
+
+%% Return the three outward edge normals for the gnomonic face triangle.
+%% Faces 0-4 are the north-pole cap (Type A), faces 15-19 are the south-pole
+%% cap (Type B).  The mid-ring faces 5-14 alternate: even = A, odd = B.
+face_edge_normals(Face) when Face =< 4 -> ?FACE_NORMALS_A;
+face_edge_normals(Face) when Face >= 15 -> ?FACE_NORMALS_B;
+face_edge_normals(Face) -> % 5..14
+    case Face band 1 of
+        0 -> ?FACE_NORMALS_A;
+        1 -> ?FACE_NORMALS_B
+    end.
+
+%% Snap a 2-D Cartesian point onto the face edge when it is close to
+%% (or beyond) the gnomonic face triangle boundary.  For each outward
+%% normal N, if N · P > INRADIUS − Scale the point is within one cell
+%% width of the edge and we move it to lie exactly on the edge.  This
+%% ensures hexagons on both sides of a face boundary have their
+%% edge-facing corners on the shared icosahedron edge, eliminating gaps.
+snap_to_face(P, Normals, Scale) ->
+    lists:foldl(fun(N, Acc) -> snap_edge(Acc, N, Scale) end, P, Normals).
+
+snap_edge({Px, Py}, {Nx, Ny}, Scale) ->
+    Dot = Px * Nx + Py * Ny,
+    case Dot > ?FACE_INRADIUS - Scale of
+        true ->
+            Excess = Dot - ?FACE_INRADIUS,
+            {Px - Excess * Nx, Py - Excess * Ny};
+        false ->
+            {Px, Py}
+    end.
 
 %% --- sphere geometry ---
 
