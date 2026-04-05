@@ -303,7 +303,7 @@ cell_geometry_corners_near_center_test() ->
         ?assertEqual(6, length(Corners)),
         lists:foreach(fun({CornerLat, CornerLon}) ->
             ?assert(abs(CornerLat - CLat) < 5.0,
-                    io_lib:format("Corner lat ~p too far from cell center ~p", [CornerLat, CLat]));
+                    io_lib:format("Corner lat ~p too far from cell center ~p", [CornerLat, CLat])),
             DLon = abs(CornerLon - CLon),
             WrappedDLon = lists:min([DLon, abs(DLon - 360.0)]),
             ?assert(WrappedDLon < 10.0,
@@ -354,9 +354,9 @@ cell_geometry_near_ico_vertices_test() ->
                      io_lib:format("cell_geometry near vertex (~p,~p) did not return 6 corners", [Lat, Lon])),
         lists:foreach(fun({CLat, CLon}) ->
             ?assert(is_float(CLat) andalso is_float(CLon),
-                    io_lib:format("Non-float corner near vertex (~p,~p)", [Lat, Lon]));
+                    io_lib:format("Non-float corner near vertex (~p,~p)", [Lat, Lon])),
             ?assert(CLat >= -90.0 andalso CLat =< 90.0,
-                    io_lib:format("Corner lat ~p out of range near vertex (~p,~p)", [CLat, Lat, Lon]));
+                    io_lib:format("Corner lat ~p out of range near vertex (~p,~p)", [CLat, Lat, Lon])),
             ?assert(CLon >= -180.0 andalso CLon =< 180.0,
                     io_lib:format("Corner lon ~p out of range near vertex (~p,~p)", [CLon, Lat, Lon]))
         end, Corners)
@@ -382,7 +382,7 @@ cell_geometry_across_face_edges_test() ->
          lists:foreach(fun({CLat, CLon}) ->
              ?assert(CLat >= -90.0 andalso CLat =< 90.0,
                      io_lib:format("Corner lat ~p out of range at offset (~p,~p)",
-                                   [CLat, DLat, DLon]));
+                                   [CLat, DLat, DLon])),
              ?assert(CLon >= -180.0 andalso CLon =< 180.0,
                      io_lib:format("Corner lon ~p out of range at offset (~p,~p)",
                                    [CLon, DLat, DLon]))

@@ -13,6 +13,7 @@
 ]).
 
 -define(D2R, 0.017453292519943295). % (math:pi() / 180.0)).
+-define(SQRT3_OVER_2, 0.86602540378443864676). % math:sqrt(3.0) / 2.0
 -define(BASE_SCALE, 2.0).
 -define(NR_FACES, 20).
 
@@ -111,7 +112,7 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
 %% --- sphere geometry ---
 
 axial_to_cartesian({Q, R}, Scale) ->
-    {Q * Scale, R * Scale}.
+    {(Q + R * 0.5) * Scale, R * ?SQRT3_OVER_2 * Scale}.
 
 scale(Res) ->
     ?BASE_SCALE / math:pow(2.0, Res).
@@ -199,9 +200,11 @@ unproject({Qf, Rf}, Face) ->
 
 %% --- grid snapping ---
 
-to_grid({Q, R}, Res) ->
+to_grid({X, Y}, Res) ->
     Scale = scale(Res),
-    hex_round(Q / Scale, R / Scale).
+    Rf = Y / (Scale * ?SQRT3_OVER_2),
+    Qf = X / Scale - Rf * 0.5,
+    hex_round(Qf, Rf).
 
 hex_round(Qf, Rf) ->
     Sf = -Qf - Rf,
