@@ -66,7 +66,7 @@ neighbors_test() ->
 
 %% Test that neighbors are geographically close to the center cell,
 %% even when crossing face boundaries.
-neighbor_consistency_test() ->
+neighor_consistency_test() ->
     %% Pick several points, including some near known boundaries (vertices).
     TestPoints = [
         {0.0, 0.0},
@@ -101,7 +101,7 @@ neighbor_consistency_test() ->
     end, TestPoints).
 
 %% Test specifically for crossing face boundaries.
-neighbor_boundary_test() ->
+neighor_boundary_test() ->
     %% We need a point where neighbors fall on different faces.
     %% Let's try to find one by searching around a vertex.
     %% Vertex 1 is at {UpLat, 0.0}.
@@ -202,7 +202,69 @@ face_centres_test() ->
                           %% the first digit should be (1<<Bit)*2 + (1<<Bit) = 3.
                           %% Subsequent digits should be 0.
                           ?assertEqual(<<"3000000">>, DigitsBin, io_lib:format("Center of face ~p produced digits ~s", [I, DigitsBin]))
-                    
                   end,
                   lists:zip(lists:seq(0, 19), Centres)),
     ok.
+
+%% neighbors_2 returns twelve binary second-ring neighbor codes
+neighbors_2_test() ->
+    Code = isea4h:encode({20.0, 10.0}, 5),
+    N2 = isea4h:neighbors_2(Code),
+    ?assertEqual(12, length(N2)),
+    lists:foreach(fun(C) -> ?assert(is_binary(C)) end, N2).
+
+%% neighbors_2 must not overlap with the first ring
+neighbors_2_no_overlap_test() ->
+    Code = isea4h:encode({20.0, 10.0}, 5),
+    N1 = isea4h:neighbors(Code),
+    N2 = isea4h:neighbors_2(Code),
+    Overlap = [C || C <- N2, lists:member(C, N1)],
+    ?assertEqual([], Overlap).
+
+%% neighbors_2 forms the second ring – cells are farther away than first-ring cells
+neighbors_2_farther_than_ring1_test() ->
+    Code = isea4h:encode({20.0, 10.0}, 7),
+    {Lat, Lon} = isea4h:decode(Code),
+    N1 = isea4h:neighbors(Code),
+    N2 = isea4h:neighbors_2(Code),
+    AvgDist = fun(Codes) ->
+        Dists = [begin
+                     {NLat, NLon} = isea4h:decode(C),
+                     DLon = abs(NLon - Lon),
+                     WrappedDLon = lists:min([DLon, abs(DLon - 360.0)]),
+                     math:sqrt(math:pow(NLat - Lat, 2) + math:pow(WrappedDLon, 2))
+                 end || C <- Codes],
+        lists:sum(Dists) / length(Dists)
+    end,
+    ?assert(AvgDist(N2) > AvgDist(N1)).
+
+%% neighbors_2 cells should still be geographically close to the center cell
+neighbors_2_consistency_test() ->
+    TestPoints = [
+        {0.0, 0.0},
+        {45.0, 45.0},
+        {89.9, 0.0},   %% Near North Pole
+        {-89.9, 0.0},  %% Near South Pole
+        {26.565, 0.0}, %% Near vertex 1
+        {0.0, 180.0}
+    ],
+    Res = 7,
+    lists:foreach(fun(Coord) ->
+        Code = isea4h:encode(Coord, Res),
+        {Lat, Lon} = isea4h:decode(Code),
+        N2 = isea4h:neighbors_2(Code),
+        ?assertEqual(12, length(N2)),
+        lists:foreach(fun(NCode) ->
+            {NLat, NLon} = isea4h:decode(NCode),
+            %% Second ring is roughly twice as far as first ring, still within ~10 degrees.
+            ?assert(abs(NLat - Lat) < 10.0,
+                    io_lib:format("neighbors_2 cell ~s (Lat ~p) too far from center ~s (Lat ~p)",
+                                  [NCode, NLat, Code, Lat])),
+            IsNearPole = abs(Lat) > 85.0 orelse abs(NLat) > 85.0,
+            DiffLon = abs(NLon - Lon),
+            ActualDiffLon = lists:min([DiffLon, abs(DiffLon - 360.0)]),
+            ?assert(IsNearPole orelse ActualDiffLon < 20.0,
+                    io_lib:format("neighbors_2 cell ~s (Lon ~p) too far from center ~s (Lon ~p)",
+                                  [NCode, NLon, Code, Lon]))
+        end, N2)
+    end, TestPoints).
