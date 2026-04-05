@@ -185,9 +185,6 @@ snap_edge(A, Normal, Scale) ->
 axial_to_cartesian({Q, R}, Scale) ->
     {(Q + R * 0.5) * Scale, R * ?SQRT3_OVER_2 * Scale}.
 
-scale(Res) ->
-    ?BASE_SCALE / math:pow(2.0, Res).
-
 to_xyz({Lat, Lon}) ->
     Lo = Lon * ?D2R,
     La = Lat * ?D2R,
@@ -233,29 +230,63 @@ ico_verts() ->
         Verts -> Verts
     end.
 
-nearest_face({X, Y, Z}) ->
-    Cs = face_centres(),
-    Pairs = lists:zip([X*Cx+Y*Cy+Z*Cz || {Cx,Cy,Cz} <- Cs], lists:seq(0, length(Cs)-1)),
-    {_, Idx} = lists:foldl(fun({D,I},{BD,_}) when D > BD ->
-                                   {D,I};
-                               (_, Acc) ->
-                                   Acc
-                           end,
-                           {-2.0,0},
-                           Pairs),
-    Idx.
+nearest_face(XYZ) ->
+    nearest_face(XYZ, face_centres(), 0, -2.0, 0).
+
+nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
+    MaxIdx;
+nearest_face({X,Y,Z}=XYZ, [{Cx,Cy,Cz}|Rest], Idx, MaxD, MaxIdx) ->
+    D = X*Cx + Y*Cy + Z*Cz,
+    if D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
+       true -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
+    end.
 
 face_basis(Face) ->
-    {Cx,Cy,Cz} = lists:nth(Face+1, face_centres()),
-    RawU = cross({Cx,Cy,Cz}, {0.0,0.0,1.0}),
-    {Ux0,Uy0,Uz0} = RawU,
-    UU = case abs(Ux0)+abs(Uy0)+abs(Uz0) < 1.0e-10 of
-             true  -> cross({Cx,Cy,Cz}, {1.0,0.0,0.0});
-             false -> RawU
-         end,
-    U = unit(UU),
-    V = unit(cross({Cx,Cy,Cz}, U)),
-    {{Cx,Cy,Cz}, U, V}.
+    element(Face+1, face_bases()).
+
+face_bases() ->
+    case persistent_term:get({?MODULE, face_bases}, undefined) of
+        undefined ->
+            Bases = [begin
+                 Centre = lists:nth(I+1, face_centres()),
+                 RawU = cross(Centre, {0.0,0.0,1.0}),
+                 {Ux0,Uy0,Uz0} = RawU,
+                 UU = case abs(Ux0)+abs(Uy0)+abs(Uz0) < 1.0e-10 of
+                          true  -> cross(Centre, {1.0,0.0,0.0});
+                          false -> RawU
+                      end,
+                 U = unit(UU),
+                 V = unit(cross(Centre, U)),
+                 {Centre, U, V}
+             end || I <- lists:seq(0, ?NR_FACES-1)],
+            BasesTuple = list_to_tuple(Bases),
+            persistent_term:put({?MODULE, face_bases}, BasesTuple),
+            BasesTuple;
+        Bases -> Bases
+    end.
+
+face_bins() ->
+    case persistent_term:get({?MODULE, face_bins}, undefined) of
+        undefined ->
+            Bins = [integer_to_binary(I, ?NR_FACES) || I <- lists:seq(0, ?NR_FACES-1)],
+            BinsTuple = list_to_tuple(Bins),
+            persistent_term:put({?MODULE, face_bins}, BinsTuple),
+            BinsTuple;
+        Bins -> Bins
+    end.
+
+scales() ->
+    case persistent_term:get({?MODULE, scales}, undefined) of
+        undefined ->
+            Scales = [?BASE_SCALE / math:pow(2.0, R) || R <- lists:seq(0, 24)],
+            ScalesTuple = list_to_tuple(Scales),
+            persistent_term:put({?MODULE, scales}, ScalesTuple),
+            ScalesTuple;
+        Scales -> Scales
+    end.
+
+scale(Res) when Res >= 0, Res =< 24 ->
+    element(Res+1, scales()).
 
 project({X, Y, Z}, Face) ->
     {{Cx,Cy,Cz},{Ux,Uy,Uz},{Vx,Vy,Vz}} = face_basis(Face),
@@ -272,9 +303,9 @@ unproject({Qf, Rf}, Face) ->
 %% --- grid snapping ---
 
 to_grid({X, Y}, Res) ->
-    Scale = scale(Res),
-    Rf = Y / (Scale * ?SQRT3_OVER_2),
-    Qf = X / Scale - Rf * 0.5,
+    S = scale(Res),
+    Rf = Y / (S * ?SQRT3_OVER_2),
+    Qf = X / S - Rf * 0.5,
     hex_round(Qf, Rf).
 
 hex_round(Qf, Rf) ->
@@ -294,7 +325,7 @@ hex_round(Qf, Rf) ->
 
 to_code(Face, Axial, Res) ->
     Digits = to_digits(Axial, Res),
-    FaceBin = integer_to_binary(Face, ?NR_FACES),
+    FaceBin = element(Face+1, face_bins()),
     <<FaceBin/binary, $-, Digits/binary>>.
 
 to_digits({QG, RG}, Res) ->
@@ -308,18 +339,15 @@ to_digits1(_Q, _R, _L, Acc) ->
     Acc.
 
 from_digits(Digits, Res) when is_binary(Digits) ->
-    from_digits(binary_to_list(Digits), Res);
-from_digits(Digits, Res) ->
     Off = 1 bsl (Res-1),
-    {Q, R} = lists:foldl(
-               fun({D, L}, {Qa, Ra}) ->
-                       Bit = Res - L,
-                       {Qa + ((D bsr 1) bsl Bit), Ra + ((D band 1) bsl Bit)}
-               end,
-               {0, 0},
-               lists:zip([C - $0 || C <- Digits], lists:seq(1, Res))),
-    {Q - Off, R - Off}.
+    from_digits_rec(Digits, Res, 1, 0, 0, Off).
 
+from_digits_rec(<<D, Rest/binary>>, Res, L, Qa, Ra, Off) ->
+    Bit = Res - L,
+    Val = D - $0,
+    from_digits_rec(Rest, Res, L+1, Qa + ((Val bsr 1) bsl Bit), Ra + ((Val band 1) bsl Bit), Off);
+from_digits_rec(<<>>, _Res, _L, Qa, Ra, Off) ->
+    {Qa - Off, Ra - Off}.
 
 %% --- math helpers ---
 
