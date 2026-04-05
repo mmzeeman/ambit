@@ -6,8 +6,10 @@
     decode/1,
     parent/1,
     neighbors/1,
+    neighbors_2/1,
     ico_verts/0,
-    face_centres/0
+    face_centres/0,
+    cell_geometry/1
 ]).
 
 -define(D2R, 0.017453292519943295). % (math:pi() / 180.0)).
@@ -15,7 +17,10 @@
 -define(NR_FACES, 20).
 
 -define(DIRS, [{1,0}, {-1,0}, {0,1}, {0,-1}, {1,-1}, {-1,1}]).
-
+-define(DIRS2, [                                       
+      {2,0}, {-2,0}, {0,2}, {0,-2}, {2,-2}, {-2,2}, 
+      {2,-1}, {1,1}, {-1,2}, {-2,1}, {-1,-1}, {1,-2}
+]).
 
 encode(Coord) ->
     encode(Coord, 7).
@@ -30,15 +35,11 @@ encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
 decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),
     Res = byte_size(DigitsBin),
-
     Digits = binary_to_list(DigitsBin),
-    {QG, RG} = from_digits(Digits, Res),
-
-    Scale = ?BASE_SCALE / math:pow(2.0, Res),
-    Qf = QG * Scale,
-    Rf = RG * Scale,
-
-    XYZ = unproject({Qf, Rf}, Face),
+    Axial = from_digits(Digits, Res),
+    Scale = scale(Res),
+    Cartesian = axial_to_cartesian(Axial, Scale),
+    XYZ = unproject(Cartesian, Face),
     from_xyz(XYZ).
 
 parent(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
@@ -49,27 +50,71 @@ parent(<<_:1/binary, $-, DigitsBin/binary>>=Code) ->
             Code
     end.
 
-neighbors(<<FaceBin:1/binary, $-, Digits/binary>>) ->
+neighbors(Code) ->
+    compute_neighbors(Code, ?DIRS).
+
+neighbors_2(Code) ->
+    compute_neighbors(Code, ?DIRS2).
+
+compute_neighbors(<<FaceBin:1/binary, $-, Digits/binary>>, Dirs) ->
     Face = binary_to_integer(FaceBin, ?NR_FACES),
     Res = byte_size(Digits),
-    {QG, RG} = from_digits(Digits, Res),
-
-    Scale = ?BASE_SCALE / math:pow(2.0, Res),
+    CellAxial = from_digits(Digits, Res),
+    Scale = scale(Res),
     [begin
-         QG2 = QG + DQ,
-         RG2 = RG + DR,
-         Qf2 = QG2 * Scale,
-         Rf2 = RG2 * Scale,
-         XYZ = unproject({Qf2, Rf2}, Face),
+         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
+         XYZ = unproject(Cartesian, Face),
          NewFace = nearest_face(XYZ),
          Axial = project(XYZ, NewFace),
          SnappedAxial = to_grid(Axial, Res),
          FaceOut = integer_to_binary(NewFace, ?NR_FACES),
          ND = to_digits(SnappedAxial, Res),
          <<FaceOut/binary, $-, ND/binary>>
-     end || {DQ, DR} <- ?DIRS].
+     end || Delta <- Dirs].
+
+cell_geometry(<<_:1/binary, $-, DigitsBin/binary>>=Code) -> 
+     cell_geometry(Code, byte_size(DigitsBin)).
+                           
+cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) -> 
+    Face = binary_to_integer(FaceBin, ?NR_FACES),                     
+    CellAxial = from_digits(DigitsBin, byte_size(DigitsBin)),         
+    Scale = scale(Res),              
+                                                          
+    S = 1.0 / 3.0,                                       
+    CornerOffsets = [                                   
+                     {2*S, -S}, {S, S}, {-S, 2*S},                  
+                     {-2*S, S}, {-S, -S}, {S, -2*S}                
+                    ],                                               
+                                                    
+    [begin
+        Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
+
+        %% Project each corner through its own nearest face to eliminate gaps
+        XYZ = unproject(Cartesian, Face),
+        Nearest = nearest_face(XYZ),
+
+        FinalXYZ = case Nearest == Face of
+                       true ->
+                           XYZ;
+                       false ->
+                           %% Point crossed boundary, re-project properly?
+                           %% For seamlessness, the vertices must be identical.
+                           %%
+                           %% Gnomonic projection doesn't naturally stitch.
+                           %% We use the original XYZ but normalized.
+                           %%to_xyz(project(XYZ, Nearest))
+                           XYZ
+                   end,      
+        from_xyz(FinalXYZ) 
+     end || Delta <- CornerOffsets].
 
 %% --- sphere geometry ---
+
+axial_to_cartesian({Q, R}, Scale) ->
+    {Q * Scale, R * Scale}.
+
+scale(Res) ->
+    ?BASE_SCALE / math:pow(2.0, Res).
 
 to_xyz({Lat, Lon}) ->
     Lo = Lon * ?D2R,
@@ -155,7 +200,7 @@ unproject({Qf, Rf}, Face) ->
 %% --- grid snapping ---
 
 to_grid({Q, R}, Res) ->
-    Scale = ?BASE_SCALE / math:pow(2.0, Res),
+    Scale = scale(Res),
     hex_round(Q / Scale, R / Scale).
 
 hex_round(Qf, Rf) ->
@@ -218,3 +263,5 @@ cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
      Az*Bx - Ax*Bz,
      Ax*By - Ay*Bx}.
 
+vadd({E1, E2}, {F1, F2}) ->
+    {E1 + F1, E2 + F2}.
