@@ -110,8 +110,8 @@ cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>, Res) ->
                                                     
     [begin
         Cartesian = axial_to_cartesian(vadd(CellAxial, Delta), Scale),
-        Clamped = clamp_to_face(Cartesian, Normals),
-        from_xyz(unproject(Clamped, Face))
+        Snapped = snap_to_face(Cartesian, Normals, Scale),
+        from_xyz(unproject(Snapped, Face))
      end || Delta <- CornerOffsets].
 
 %% --- face edge clamping ---
@@ -127,15 +127,18 @@ face_edge_normals(Face) -> % 5..14
         1 -> ?FACE_NORMALS_B
     end.
 
-%% Clamp a 2-D Cartesian point so it lies inside (or on the edge of)
-%% the gnomonic face triangle.  For each outward normal N, if
-%% N · P > INRADIUS the point is outside that edge and we push it back.
-clamp_to_face(P, Normals) ->
-    lists:foldl(fun(N, Acc) -> clamp_edge(Acc, N) end, P, Normals).
+%% Snap a 2-D Cartesian point onto the face edge when it is close to
+%% (or beyond) the gnomonic face triangle boundary.  For each outward
+%% normal N, if N · P > INRADIUS − Scale the point is within one cell
+%% width of the edge and we move it to lie exactly on the edge.  This
+%% ensures hexagons on both sides of a face boundary have their
+%% edge-facing corners on the shared icosahedron edge, eliminating gaps.
+snap_to_face(P, Normals, Scale) ->
+    lists:foldl(fun(N, Acc) -> snap_edge(Acc, N, Scale) end, P, Normals).
 
-clamp_edge({Px, Py}, {Nx, Ny}) ->
+snap_edge({Px, Py}, {Nx, Ny}, Scale) ->
     Dot = Px * Nx + Py * Ny,
-    case Dot > ?FACE_INRADIUS of
+    case Dot > ?FACE_INRADIUS - Scale of
         true ->
             Excess = Dot - ?FACE_INRADIUS,
             {Px - Excess * Nx, Py - Excess * Ny};
