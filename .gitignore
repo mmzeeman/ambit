@@ -2,3 +2,5 @@ _build
 tags
 rebar3
 erl_crash.dump
+isea4h_edge_viz.html
+isea4h_viz.html
