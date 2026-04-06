@@ -119,7 +119,7 @@ generate_html(Res, FaceEdgesJs, GridJs, EdgeSampleJs, HexJs) ->
     [
         "<!DOCTYPE html>\n<html><head>\n",
         "<meta charset=\"utf-8\">\n",
-        "<title>ISEA4H Edge Gap Visualization \xe2\x80\x93 Res ", ResStr, "</title>\n",
+        "<title>ISEA4H Edge Gap Visualization &ndash; Res ", ResStr, "</title>\n",
         "<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" />\n",
         "<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>\n",
         "<style>\n",
