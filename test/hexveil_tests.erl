@@ -199,10 +199,9 @@ face_centres_test() ->
                           ?assertEqual(I, binary_to_integer(FaceBin, 20), 
                                        io_lib:format("Center of face ~p encoded to face ~s", [I, FaceBin])),
         
-                          %% At center (Q=0, R=0), with Off=1 bsl (Res-1), 
-                          %% the first digit should be (1<<Bit)*2 + (1<<Bit) = 3.
-                          %% Subsequent digits should be 0.
-                          ?assertEqual(<<"3000000">>, DigitsBin, io_lib:format("Center of face ~p produced digits ~s", [I, DigitsBin]))
+                          %% With the balanced system, the center of the face (Q=0, R=0) 
+                          %% should always produce all '0' digits.
+                          ?assertEqual(<<"0000000">>, DigitsBin, io_lib:format("Center of face ~p produced digits ~s", [I, DigitsBin]))
                   end,
                   lists:zip(lists:seq(0, 19), Centres)),
     ok.

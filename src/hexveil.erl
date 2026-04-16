@@ -279,25 +279,44 @@ to_code(Face, Axial, Res) ->
     <<FaceBin/binary, $-, Digits/binary>>.
 
 to_digits({QG, RG}, Res) ->
-    Off = 1 bsl (Res-1),
-    to_digits1(QG + Off, RG + Off, Res-1, <<>>).
+    to_digits_rec(QG, RG, Res, <<>>).
 
-to_digits1(Q, R, L, Acc) when L >= 0 ->
-    N = ((Q bsr L) band 1) * 2 + ((R bsr (L)) band 1),
-    to_digits1(Q, R, L-1, <<Acc/binary, (N + $0)>>);
-to_digits1(_Q, _R, _L, Acc) ->
-    Acc.
+to_digits_rec(_Q, _R, 0, Acc) ->
+    Acc;
+to_digits_rec(Q, R, L, Acc) ->
+    %% Symmetric Balanced residues modulo 2.
+    Q0 = Q band 1,
+    R0 = R band 1,
+    {D, VQ, VR} = case {Q0, R0} of
+        {0, 0} -> {$0,  0,  0}; %% Center
+        {1, 0} -> {$1,  1,  0}; %% Right
+        {1, 1} -> {$2, -1,  1}; %% Left-Up
+        {0, 1} -> {$3,  0, -1}  %% Left-Down
+    end,
+    to_digits_rec((Q - VQ) div 2, (R - VR) div 2, L - 1, <<D, Acc/binary>>).
 
 from_digits(Digits, Res) when is_binary(Digits) ->
-    Off = 1 bsl (Res-1),
-    from_digits_rec(Digits, Res, 1, 0, 0, Off).
+    {Qa, Ra} = from_digits_rec(Digits, 0, 0),
+    %% Reconstructed coordinates are modulo 2^Res. 
+    %% We sign-extend them to recover the original signed grid positions.
+    {sign_extend(Qa, Res), sign_extend(Ra, Res)}.
 
-from_digits_rec(<<D, Rest/binary>>, Res, L, Qa, Ra, Off) ->
-    Bit = Res - L,
+from_digits_rec(<<D, Rest/binary>>, Qa, Ra) ->
+    Bit = byte_size(Rest),
     Val = D - $0,
-    from_digits_rec(Rest, Res, L+1, Qa + ((Val bsr 1) bsl Bit), Ra + ((Val band 1) bsl Bit), Off);
-from_digits_rec(<<>>, _Res, _L, Qa, Ra, Off) ->
-    {Qa - Off, Ra - Off}.
+    {VQ, VR} = case Val of
+        0 -> {0,  0};
+        1 -> {1,  0};
+        2 -> {-1,  1};
+        3 -> {0, -1}
+    end,
+    from_digits_rec(Rest, Qa + (VQ bsl Bit), Ra + (VR bsl Bit));
+from_digits_rec(<<>>, Qa, Ra) ->
+    {Qa, Ra}.
+
+sign_extend(V, Res) ->
+    <<X:Res/signed>> = <<V:Res>>,
+    X.
 
 %% --- math helpers ---
 

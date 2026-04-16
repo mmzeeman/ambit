@@ -131,7 +131,14 @@ compute_neighbors(Code, NumDirs) ->
         SX = CX + Shift * math:cos(A),
         SY = CY + Shift * math:sin(A),
         NewXYZ = unproject({SX, SY}, FaceIdx),
-        encode(from_xyz(NewXYZ), Res)
+        
+        %% Optimized encoding using Hint
+        NewFaceIdx = nearest_face(NewXYZ, FaceIdx),
+        {NX, NY} = project(NewXYZ, NewFaceIdx),
+        {V1n, V2n, V3n} = face_verts_2d(NewFaceIdx),
+        NDigits = sub_encode({NX, NY}, {V1n, V2n, V3n}, Res, <<>>),
+        FaceBin = element(NewFaceIdx+1, face_bins()),
+        <<FaceBin/binary, $-, NDigits/binary>>
     end || A <- Angles]) -- [Code].
 
 dist_2d({X1,Y1}, {X2,Y2}) ->
@@ -181,8 +188,23 @@ cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
     {Ay*Bz - Az*By, Az*Bx - Ax*Bz, Ax*By - Ay*Bx}.
 
 nearest_face(XYZ) ->
-    Centres = persistent_term:get({?MODULE, face_centres}),
-    nearest_face(XYZ, Centres, 0, -2.0, 0).
+    nearest_face(XYZ, face_centres_list(), 0, -2.0, 0).
+
+nearest_face({X,Y,Z}=XYZ, HintFace) ->
+    Neighbors = element(HintFace+1, face_adjacencies()),
+    CheckFaces = tuple_to_list(Neighbors),
+    {Cx,Cy,Cz} = lists:nth(HintFace+1, face_centres_list()),
+    D = X*Cx + Y*Cy + Z*Cz,
+    search_faces(XYZ, CheckFaces, D, HintFace).
+
+search_faces(_XYZ, [], _MaxD, MaxIdx) ->
+    MaxIdx;
+search_faces({X,Y,Z}=XYZ, [FaceIdx|Rest], MaxD, MaxIdx) ->
+    {Cx,Cy,Cz} = lists:nth(FaceIdx+1, face_centres_list()),
+    D = X*Cx + Y*Cy + Z*Cz,
+    if D > MaxD -> search_faces(XYZ, Rest, D, FaceIdx);
+       true -> search_faces(XYZ, Rest, MaxD, MaxIdx)
+    end.
 
 nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
     MaxIdx;
@@ -197,6 +219,8 @@ nearest_face({X,Y,Z}=XYZ, [{Cx,Cy,Cz}|Rest], Idx, MaxD, MaxIdx) ->
 face_basis(Face) -> element(Face+1, persistent_term:get({?MODULE, face_bases})).
 face_bins() -> persistent_term:get({?MODULE, face_bins}).
 face_verts_2d(Idx) -> element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
+face_centres_list() -> persistent_term:get({?MODULE, face_centres}).
+face_adjacencies() -> persistent_term:get({?MODULE, face_adjacencies}).
 
 init_persistent_terms() ->
     UpLat = math:atan(0.5) / ?D2R,
@@ -220,6 +244,15 @@ init_persistent_terms() ->
                    unit({(Ax+Bx+Cx)/3.0, (Ay+By+Cy)/3.0, (Az+Bz+Cz)/3.0})
                end || {A,B,C} <- Faces],
     persistent_term:put({?MODULE, face_centres}, Centres),
+
+    %% Calculate Face Adjacencies
+    Adj = [begin
+        {V0, V1, V2} = lists:nth(I+1, Faces),
+        {find_neighbor(I, V1, V2, Faces),
+         find_neighbor(I, V2, V0, Faces),
+         find_neighbor(I, V0, V1, Faces)}
+    end || I <- lists:seq(0, 19)],
+    persistent_term:put({?MODULE, face_adjacencies}, list_to_tuple(Adj)),
 
     %% Calculate Face Bases (U/V vectors)
     Bases = [begin
@@ -253,3 +286,10 @@ init_persistent_terms() ->
 
     persistent_term:put({?MODULE, face_bins}, 
                         list_to_tuple([integer_to_binary(I, 20) || I <- lists:seq(0, 19)])).
+
+find_neighbor(MyIdx, Va, Vb, Faces) ->
+    [NeighborIdx] = [Idx || {Idx, F} <- lists:zip(lists:seq(0, 19), Faces),
+                            Idx /= MyIdx,
+                            lists:member(Va, tuple_to_list(F)),
+                            lists:member(Vb, tuple_to_list(F))],
+    NeighborIdx.
