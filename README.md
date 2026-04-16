@@ -34,15 +34,14 @@ Leaflet map to inspect the grid.
 The Earth is first divided into 20 icosahedral faces. Each face acts as its own local
 coordinate system, significantly reducing distortion at the poles.
 
-![Icosahedral Face Mapping](https://raw.githubusercontent.com/mmzeeman/hexveil/main/docs/faces.png)
-*(Placeholder: Image showing the 20 icosahedral faces mapped to the globe)*
+![Icosahedral Face Mapping](docs/faces.svg)
+*(Diagram showing the 20 icosahedral faces mapped to the globe)*
 
 ### 2. Hierarchical Scaling (Aperture 4)
-As you increase the resolution, each hexagon precisely covers the center of its parent, with
-three other children surrounding it.
+As you increase the resolution, each hexagon precisely covers the center of its parent, with three other children surrounding it.
 
-![Aperture 4 Hierarchy](https://raw.githubusercontent.com/mmzeeman/hexveil/main/docs/hierarchy.png)
-*(Placeholder: Image showing L17 cells nested within L16 and L15 parents)*
+![Aperture 4 Hierarchy](docs/hierarchy.svg)
+*(Diagram showing L17 cells nested within L16 and L15 parents)*
 
 ---
 

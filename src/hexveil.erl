@@ -55,7 +55,8 @@
     neighbors_2/1,
     ico_verts/0,
     face_centres/0,
-    cell_geometry/1
+    cell_geometry/1,
+    from_xyz/1
 ]).
 
 -on_load(init_persistent_terms/0).
