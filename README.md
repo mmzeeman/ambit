@@ -163,6 +163,10 @@ A single triveil code covers a **triangular** cell. To approximate a **circular*
 visibility area, `triveil:disk/3` returns the set of triangle codes whose union
 covers the circle. Each item stores this set as its `visibility_codes`.
 
+**Privacy:** The disk is always centered on the **parent triangle's centroid**, not
+the exact user location. All users within the same parent cell produce identical
+disk sets, preventing reverse-engineering of precise positions from stored codes.
+
 #### Generating Visibility Codes
 
 ```erlang
@@ -274,15 +278,15 @@ visibility diameter of 1000 m (measured at Amsterdam, 52.37°N):
 
 | Level | Cell Diameter | Codes in disk(1000m) | Shape |
 | :--- | :--- | :--- | :--- |
-| **12** | ~1938 m | 6 | Coarse coverage |
-| **13** | ~969 m | 6 | ← **optimal** (fewest codes) |
-| **14** | ~485 m | 19 | Rough circle |
-| **15** | ~242 m | 50 | Smooth circle |
-| **16** | ~121 m | 160 | Very precise circle |
+| **12** | ~1938 m | 1 | Single triangle (overshoots) |
+| **13** | ~969 m | 1 | ← **optimal** (fewest codes) |
+| **14** | ~485 m | 13 | Rough circle |
+| **15** | ~242 m | 47 | Smooth circle |
+| **16** | ~121 m | 165 | Very precise circle |
 
-**Rule of thumb:** pick the level where `cell diameter ≈ visibility diameter`. That
-yields ~6 codes — enough to cover the circle with no gaps at the boundary. Going
-finer gives a rounder shape but with exponentially more codes to store and query.
+**Rule of thumb:** pick the level where `cell diameter ≈ visibility diameter`. At
+the optimal level the disk is compact (~1 code). Going finer gives a rounder shape
+but with exponentially more codes to store and query.
 
 The full cell-diameter table for triveil:
 

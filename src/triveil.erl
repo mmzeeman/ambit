@@ -97,10 +97,15 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
 
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
+    %% Use the parent triangle's centroid as the disk center for privacy:
+    %% all users within the same parent cell produce identical disks,
+    %% preventing exact location recovery from the set of codes.
+    ParentCode = parent(CenterCode),
+    PrivacyCenter = decode(ParentCode),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
     Queue0 = queue:from_list([CenterCode]),
-    disk_bfs(Center, RadiusMeters, Queue0, Visited0, [CenterCode]).
+    disk_bfs(PrivacyCenter, RadiusMeters, Queue0, Visited0, [CenterCode]).
 
 disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
     case queue:out(Queue0) of
