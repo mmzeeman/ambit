@@ -52,9 +52,13 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
 
 disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
     {Lat, Lon} = decode(Code),
-    [_, Digits] = binary:split(Code, <<"-">>),
-    Res = byte_size(Digits),
-    disk_from_center({Lat, Lon}, Res, DiameterMeters);
+    case binary:split(Code, <<"-">>) of
+        [_, Digits] when byte_size(Digits) > 0 ->
+            Res = byte_size(Digits),
+            disk_from_center({Lat, Lon}, Res, DiameterMeters);
+        _ ->
+            erlang:error(badarg)
+    end;
 disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk({Lat, Lon}, 7, DiameterMeters).
 
@@ -65,7 +69,7 @@ disk({Lat, Lon}, Res, DiameterMeters)
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
     RadiusMeters = DiameterMeters / 2.0,
-    Visited0 = sets:add_element(CenterCode, sets:new()),
+    Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
     lists:usort(disk_bfs(Center, RadiusMeters, [CenterCode], Visited0, [CenterCode])).
 
 disk_bfs(_Center, _RadiusMeters, [], _Visited, Acc) ->
