@@ -7,6 +7,7 @@
     encode/2, encode/1,
     decode/1,
     disk/2, disk/3,
+    optimal_level/1,
     parent/1,
     cell_geometry/1,
     neighbors/1,
@@ -71,6 +72,28 @@ disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(
 disk({Lat, Lon}, Res, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk_from_center({Lat, Lon}, Res, DiameterMeters).
+
+%% @doc Return the resolution level whose triangular cells best match the
+%% given diameter in meters. At this level, `disk/3' returns the fewest
+%% codes while still approximating a circle of that diameter.
+%%
+%% The triangular cell diameter halves with each level (aperture 4).
+%% At level 1, cell diameter is approximately 4,000 km.
+%%
+%% Example:
+%%   triveil:optimal_level(1000).   %% => 13  (cell ≈ 969 m)
+%%   triveil:optimal_level(500).    %% => 14  (cell ≈ 485 m)
+%%   triveil:optimal_level(100).    %% => 16  (cell ≈ 121 m)
+-spec optimal_level(DiameterMeters :: number()) -> 1..24.
+optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0 ->
+    %% Cell diameter at level 1 ≈ 4,003,017 m (empirically measured
+    %% as the circumdiameter of a level-1 triangle at mid-latitudes).
+    %% Each subsequent level halves the cell diameter (aperture 4).
+    %%
+    %% Level = round(log2(BaseDiameter / DiameterMeters)) + 1
+    BaseDiameter = 4003017.0,
+    Level = round(math:log2(BaseDiameter / DiameterMeters)) + 1,
+    max(1, min(24, Level)).
 
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),

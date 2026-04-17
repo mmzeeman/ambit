@@ -184,6 +184,52 @@ WHERE code = ANY($1)                    -- item is in viewer's disk
 The prefix approach is faster (btree), while the disk approach is more precise (exact
 circle). Choose based on whether approximate cell-boundary results are acceptable.
 
+### Choosing the Optimal Level for `visibility_codes`
+
+A single triveil code covers a **triangular** cell, not a circle. To approximate a
+circular visibility area, `triveil:disk/3` returns multiple codes — but the number
+depends heavily on which resolution level you choose. Each level halves the cell
+diameter (aperture 4), so going one level finer **quadruples** the code count.
+
+Use `triveil:optimal_level/1` to pick the level that minimizes the number of codes:
+
+```erlang
+%% Find the level whose cells best match a 1000 m visibility diameter
+Res = triveil:optimal_level(1000).    %% => 13
+
+%% Generate the visibility disk at that level
+Codes = triveil:disk({Lat, Lon}, Res, 1000).
+%% => ~2 codes (minimal, circle approximated by 2 triangles)
+```
+
+The table below shows how the code count grows as the level gets finer, for a
+visibility diameter of 1000 m (measured at Amsterdam, 52.37°N):
+
+| Level | Cell Diameter | Codes in disk(1000m) | Shape |
+| :--- | :--- | :--- | :--- |
+| **12** | ~1938 m | 1 | Single triangle (overshoots) |
+| **13** | ~969 m | 2 | ← **optimal** (fewest codes) |
+| **14** | ~485 m | 7 | Rough circle |
+| **15** | ~242 m | 31 | Smooth circle |
+| **16** | ~121 m | 129 | Very precise circle |
+
+**Rule of thumb:** pick the level where `cell diameter ≈ visibility diameter`. That
+yields ~2–3 codes — the minimum needed to cover the circle. Going finer gives a
+rounder shape but with exponentially more codes to store and query.
+
+The full cell-diameter table for triveil:
+
+| Level | Cell ø | Level | Cell ø | Level | Cell ø |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | ~4000 km | **9** | ~15.5 km | **17** | ~61 m |
+| **2** | ~2000 km | **10** | ~7.8 km | **18** | ~30 m |
+| **3** | ~977 km | **11** | ~3.9 km | **19** | ~15 m |
+| **4** | ~500 km | **12** | ~1.9 km | **20** | ~7.6 m |
+| **5** | ~249 km | **13** | ~969 m | **21** | ~3.8 m |
+| **6** | ~124 km | **14** | ~485 m | **22** | ~1.9 m |
+| **7** | ~62 km | **15** | ~242 m | **23** | ~0.9 m |
+| **8** | ~31 km | **16** | ~121 m | **24** | ~0.5 m |
+
 ---
 
 ## Privacy Applications

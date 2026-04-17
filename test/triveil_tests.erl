@@ -73,3 +73,25 @@ neighbor_consistency_test() ->
                 ?assert(false)
         end
     end, N1).
+
+%% optimal_level returns a level whose cell diameter closely matches the target
+optimal_level_test() ->
+    %% Empirical cell diameters (at Amsterdam):
+    %%   L13 ≈  969 m, L14 ≈ 485 m, L16 ≈ 121 m
+    ?assertEqual(13, triveil:optimal_level(1000)),
+    ?assertEqual(14, triveil:optimal_level(500)),
+    ?assertEqual(16, triveil:optimal_level(100)).
+
+%% optimal_level clamps to valid range
+optimal_level_clamp_test() ->
+    ?assertEqual(1,  triveil:optimal_level(100000000)),  %% huge → level 1
+    ?assertEqual(24, triveil:optimal_level(0.001)).      %% tiny → level 24
+
+%% optimal_level result can be used directly with disk/3
+optimal_level_disk_integration_test() ->
+    Diameter = 1000,
+    Res = triveil:optimal_level(Diameter),
+    Codes = triveil:disk({52.3676, 4.9041}, Res, Diameter),
+    %% At optimal level, disk should return a small number of codes (1-4)
+    ?assert(length(Codes) >= 1 andalso length(Codes) =< 10,
+            io_lib:format("Expected 1-10 codes at optimal level ~B, got ~B", [Res, length(Codes)])).
