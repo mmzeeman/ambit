@@ -51,9 +51,9 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     from_xyz(XYZ).
 
 disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
-    {Lat, Lon} = decode(Code),
     case binary:split(Code, <<"-">>) of
         [_, Digits] when byte_size(Digits) > 0 ->
+            {Lat, Lon} = decode(Code),
             Res = byte_size(Digits),
             disk_from_center({Lat, Lon}, Res, DiameterMeters);
         _ ->
