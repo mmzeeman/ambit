@@ -157,32 +157,86 @@ WHERE code LIKE $search_prefix || '%'              -- item is in viewer's search
 away, so A's full code does **not** share B's L16 prefix — the second `LIKE` check fails.
 No per-row distance calculation needed.
 
-### Using `disk/2` for Exact Results
+### Using `disk/2` for Exact Circular Coverage
 
-When you need exact circular coverage (e.g. the item is near a cell boundary and a
-single prefix would miss it), use `triveil:disk/2` from the companion triangular-grid
-module (included in this repository) which returns all cell codes within a given
-diameter:
+A single triveil code covers a **triangular** cell. To approximate a **circular**
+visibility area, `triveil:disk/3` returns the set of triangle codes whose union
+covers the circle. Each item stores this set as its `visibility_codes`.
+
+#### Generating Visibility Codes
 
 ```erlang
-%% Get all cells within 1000 m of a location
-Codes = triveil:disk(Code, 1000).
+%% Item at {Lat, Lon}, visible within 1000 m
+%% Step 1: Pick the level that minimizes the number of codes
+Res = triveil:optimal_level(1000).       %% => 13  (cell ≈ 969 m)
+
+%% Step 2: Generate the disk codes at that level
+VisibilityCodes = triveil:disk({Lat, Lon}, Res, 1000).
+%% => [<<"0-1312312">>, <<"0-1312310">>]  (~2 codes at optimal level)
 ```
 
-Then store or query using array containment (with a **GIN index** for performance):
+#### Storage Schema
+
+Store the visibility codes as an **array column** with a **GIN index**:
 
 ```sql
--- Exact disk-based query
--- $1 = triveil:disk(viewer_code, 1000)   (viewer's search area)
--- $2 = viewer_code                        (viewer's own code)
+CREATE TABLE items (
+    id           bigint PRIMARY KEY,
+    code         text NOT NULL,         -- full-resolution triveil code (L24)
+    visibility_codes text[] NOT NULL,   -- disk codes at optimal level
+    ...
+);
 
-SELECT * FROM items
-WHERE code = ANY($1)                    -- item is in viewer's disk
-  AND $2 = ANY(visibility_codes);       -- viewer is in item's visibility disk
+-- GIN index for array containment queries (ANY/&&)
+CREATE INDEX idx_items_visibility ON items USING GIN (visibility_codes);
+
+-- Btree index for the item's own code
+CREATE INDEX idx_items_code ON items (code);
 ```
 
-The prefix approach is faster (btree), while the disk approach is more precise (exact
-circle). Choose based on whether approximate cell-boundary results are acceptable.
+#### Query Pattern (Dual-Disk)
+
+At query time, the viewer also computes a search disk, then checks both directions:
+
+```erlang
+%% Viewer at {VLat, VLon}, searching within 2000 m
+ViewerRes = triveil:optimal_level(2000),
+SearchCodes = triveil:disk({VLat, VLon}, ViewerRes, 2000),
+ViewerCode = triveil:encode({VLat, VLon}, 24).
+```
+
+```sql
+-- $1 = SearchCodes (viewer's search disk)
+-- $2 = ViewerCode  (viewer's full-resolution code)
+
+SELECT * FROM items
+WHERE code = ANY($1)                    -- item is in viewer's search area
+  AND $2 = ANY(visibility_codes);       -- viewer is in item's visibility area
+```
+
+**How it works:**
+- The first condition (`code = ANY($1)`) checks if the item's location falls within
+  any of the viewer's search-disk triangles — the GIN index on the array makes this fast.
+- The second condition (`$2 = ANY(visibility_codes)`) checks if the viewer's location
+  falls within the item's pre-computed visibility disk — respecting the item's own
+  visibility radius.
+
+**Example:** Item B is visible within 500 m. Viewer A is 800 m away, searching
+within 2000 m. B falls inside A's search disk (first check passes), but A does *not*
+fall inside B's 500 m visibility disk (second check fails). B is correctly excluded —
+all without distance calculations.
+
+#### Visualizing a Disk
+
+Run the triveil visualizer with a fourth argument to see the disk:
+
+```bash
+./triveil_viz.escript 52.3676 4.9041 13 1000
+```
+
+This generates `triveil_viz.html` showing the triangular cells (magenta fill) that
+compose the 1000 m visibility disk, overlaid with a dashed reference circle for
+comparison. An info panel shows the code count and optimal level.
 
 ### Choosing the Optimal Level for `visibility_codes`
 
