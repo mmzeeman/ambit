@@ -278,15 +278,16 @@ visibility diameter of 1000 m (measured at Amsterdam, 52.37°N):
 
 | Level | Cell Diameter | Codes in disk(1000m) | Shape |
 | :--- | :--- | :--- | :--- |
-| **12** | ~1938 m | 1 | Single triangle (overshoots) |
-| **13** | ~969 m | 1 | ← **optimal** (fewest codes) |
+| **12** | ~1938 m | 1 | Single triangle (overshoots by ~2×) |
+| **13** | ~969 m | 1 | ← **optimal** (best fit, minimal overshoot) |
 | **14** | ~485 m | 13 | Rough circle |
 | **15** | ~242 m | 47 | Smooth circle |
 | **16** | ~121 m | 165 | Very precise circle |
 
 **Rule of thumb:** pick the level where `cell diameter ≈ visibility diameter`. At
-the optimal level the disk is compact (~1 code). Going finer gives a rounder shape
-but with exponentially more codes to store and query.
+that level the parent-centered disk uses the fewest codes with the least overshoot.
+Going finer gives a rounder shape but with exponentially more codes to store and
+query.
 
 The full cell-diameter table for triveil:
 
