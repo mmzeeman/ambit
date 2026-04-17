@@ -108,9 +108,8 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
 
 disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
-    %% Use the cell triangle's orthocenter as the disk center for privacy:
-    %% all users within the same cell produce identical disks,
-    %% preventing exact location recovery from the set of codes.
+    %% Use the cell triangle's orthocenter as the disk center so the
+    %% circle is centered on the cell the user is in.
     DiskCenter = orthocenter(CenterCode),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:from_list([CenterCode], [{version, 2}]),
