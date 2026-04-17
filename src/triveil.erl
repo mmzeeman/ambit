@@ -17,11 +17,12 @@
 -on_load(init_persistent_terms/0).
 
 -define(D2R, 0.017453292519943295).
+-define(DEFAULT_RES, 7).
 -define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
 
 encode(Coord) ->
-    encode(Coord, 7).
+    encode(Coord, ?DEFAULT_RES).
 
 encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
     XYZ = to_xyz({Lat, Lon}),
@@ -53,14 +54,19 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
 disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
     case binary:split(Code, <<"-">>) of
         [_, Digits] when byte_size(Digits) > 0 ->
-            {Lat, Lon} = decode(Code),
-            Res = byte_size(Digits),
-            disk_from_center({Lat, Lon}, Res, DiameterMeters);
+            try decode(Code) of
+                {Lat, Lon} ->
+                    Res = byte_size(Digits),
+                    disk_from_center({Lat, Lon}, Res, DiameterMeters)
+            catch
+                _:_ ->
+                    erlang:error(badarg)
+            end;
         _ ->
             erlang:error(badarg)
     end;
 disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
-    disk({Lat, Lon}, 7, DiameterMeters).
+    disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
 
 disk({Lat, Lon}, Res, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
@@ -70,29 +76,33 @@ disk_from_center(Center, Res, DiameterMeters) ->
     CenterCode = encode(Center, Res),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
-    disk_bfs(Center, RadiusMeters, [CenterCode], Visited0, [CenterCode]).
+    Queue0 = queue:from_list([CenterCode]),
+    disk_bfs(Center, RadiusMeters, Queue0, Visited0, [CenterCode]).
 
-disk_bfs(_Center, _RadiusMeters, [], _Visited, Acc) ->
-    Acc;
-disk_bfs(Center, RadiusMeters, [Code | Rest], Visited, Acc) ->
-    {AddedRev, Visited1, Acc1} = lists:foldl(
-        fun(NCode, {Added, V0, A0}) ->
-            case sets:is_element(NCode, V0) of
-                true ->
-                    {Added, V0, A0};
-                false ->
-                    V1 = sets:add_element(NCode, V0),
-                    DistMeters = great_circle_distance(Center, decode(NCode)),
-                    case DistMeters =< RadiusMeters of
-                        true -> {[NCode | Added], V1, [NCode | A0]};
-                        false -> {Added, V1, A0}
+disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
+    case queue:out(Queue0) of
+        {empty, _} ->
+            Acc;
+        {{value, Code}, Queue1} ->
+            {Queue2, Visited1, Acc1} = lists:foldl(
+                fun(NCode, {Q0, V0, A0}) ->
+                    case sets:is_element(NCode, V0) of
+                        true ->
+                            {Q0, V0, A0};
+                        false ->
+                            V1 = sets:add_element(NCode, V0),
+                            DistMeters = great_circle_distance(Center, decode(NCode)),
+                            case DistMeters =< RadiusMeters of
+                                true -> {queue:in(NCode, Q0), V1, [NCode | A0]};
+                                false -> {Q0, V1, A0}
+                            end
                     end
-            end
-        end,
-        {[], Visited, Acc},
-        neighbors(Code)
-    ),
-    disk_bfs(Center, RadiusMeters, Rest ++ lists:reverse(AddedRev), Visited1, Acc1).
+                end,
+                {Queue1, Visited, Acc},
+                neighbors(Code)
+            ),
+            disk_bfs(Center, RadiusMeters, Queue2, Visited1, Acc1)
+    end.
 
 great_circle_distance(P1, P2) ->
     {X1, Y1, Z1} = to_xyz(P1),
