@@ -91,15 +91,16 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
         ".bindPopup('Exact location: ~f, ~f');~n",
         [Lat, Lon, Lat, Lon]),
 
-    %% Reference circle centered on the orthocenter of the code triangle
+    %% Reference circle centered on the orthocenter of the parent triangle
+    %% (matches the privacy center used by the disk computation)
     CircleJs = case MaybeDiam of
         undefined -> "";
         D ->
-            {OLat, OLon} = triveil:orthocenter(Code),
+            {OLat, OLon} = triveil:orthocenter(Parent),
             io_lib:format(
                 "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
                 "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
-                ".bindPopup('Reference circle: ~f m diameter (centered on orthocenter)');~n",
+                ".bindPopup('Reference circle: ~f m diameter (centered on parent orthocenter)');~n",
                 [OLat, OLon, D / 2.0, D])
     end,
 

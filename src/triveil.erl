@@ -114,9 +114,14 @@ disk_from_center(Center, Res, DiameterMeters) ->
     ParentCode = parent(CenterCode),
     PrivacyCenter = orthocenter(ParentCode),
     RadiusMeters = DiameterMeters / 2.0,
-    Visited0 = sets:add_element(CenterCode, sets:new([{version, 2}])),
-    Queue0 = queue:from_list([CenterCode]),
-    disk_bfs(PrivacyCenter, RadiusMeters, Queue0, Visited0, [CenterCode]).
+    %% Start BFS from the cell containing the privacy center (the disk center)
+    %% so the BFS expands outward from the actual center of the disk.
+    %% Also seed with the user's cell to ensure it is always included.
+    StartCode = encode(PrivacyCenter, Res),
+    InitCodes = lists:usort([CenterCode, StartCode]),
+    Visited0 = sets:from_list(InitCodes, [{version, 2}]),
+    Queue0 = queue:from_list(InitCodes),
+    disk_bfs(PrivacyCenter, RadiusMeters, Queue0, Visited0, InitCodes).
 
 disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
     case queue:out(Queue0) of
@@ -142,12 +147,17 @@ disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
             disk_bfs(Center, RadiusMeters, Queue2, Visited1, Acc1)
     end.
 
-%% @doc Check if any corner of the triangle is within the radius.
+%% @doc Check if the triangle overlaps the disk.
+%% A triangle overlaps when any corner OR the centroid is within the radius.
+%% Checking only corners misses cells whose centroid is inside the disk but
+%% whose corners are all outside (common when cells are large relative to the disk).
 any_corner_within(Center, Code, RadiusMeters) ->
     Corners = cell_geometry(Code),
     lists:any(fun(Corner) ->
         great_circle_distance(Center, Corner) =< RadiusMeters
-    end, Corners).
+    end, Corners)
+    orelse
+    great_circle_distance(Center, decode(Code)) =< RadiusMeters.
 
 great_circle_distance(P1, P2) ->
     {X1, Y1, Z1} = to_xyz(P1),
