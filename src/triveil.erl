@@ -93,7 +93,7 @@ disk({Lat, Lon}, Res, DiameterMeters)
 %% selected for inclusion in the disk.
 %%
 %% Mode can be:
-%%   `corner'   – include the triangle when at least one corner or its
+%%   `corner'   – include the triangle when at least one corner OR its
 %%                centroid falls within the radius (default, gives a
 %%                slightly larger coverage).
 %%   `centroid' – include the triangle only when its centroid falls
@@ -190,7 +190,7 @@ any_corner_within(Center, Code, RadiusMeters) ->
         great_circle_distance(Center, Corner) =< RadiusMeters
     end, Corners)
     orelse
-    great_circle_distance(Center, decode(Code)) =< RadiusMeters.
+    centroid_within(Center, Code, RadiusMeters).
 
 %% @doc Check if the triangle's centroid is within the disk.
 centroid_within(Center, Code, RadiusMeters) ->
