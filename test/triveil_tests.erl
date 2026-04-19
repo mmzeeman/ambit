@@ -95,3 +95,35 @@ optimal_level_disk_integration_test() ->
     %% At optimal level, disk should return a small number of codes (1-4)
     ?assert(length(Codes) >= 1 andalso length(Codes) =< 10,
             io_lib:format("Expected 1-10 codes at optimal level ~B, got ~B", [Res, length(Codes)])).
+
+%% disk_center returns the same point regardless of which resolution
+%% the caller intends to use for disk tiles
+disk_center_stable_test() ->
+    Loc = {52.37456, 4.87249},
+    Center = triveil:disk_center(Loc),
+    ?assert(is_tuple(Center)),
+    {CLat, CLon} = Center,
+    ?assert(is_float(CLat)),
+    ?assert(is_float(CLon)),
+    %% Center should be near the input location (within ~1 km at level 15)
+    Dist = great_circle_m(Loc, Center),
+    ?assert(Dist < 1000.0,
+            io_lib:format("Privacy center too far from input: ~f m", [Dist])).
+
+%% Two different points in the same level-15 cell should get the same center
+disk_center_same_cell_test() ->
+    %% Two nearby points that should fall in the same level-15 triangle
+    Loc1 = {52.37456, 4.87249},
+    Loc2 = {52.37457, 4.87250},
+    C1 = triveil:disk_center(Loc1),
+    C2 = triveil:disk_center(Loc2),
+    ?assertEqual(C1, C2).
+
+great_circle_m({Lat1, Lon1}, {Lat2, Lon2}) ->
+    D2R = 0.017453292519943295,
+    Lo1 = Lon1 * D2R, La1 = Lat1 * D2R,
+    Lo2 = Lon2 * D2R, La2 = Lat2 * D2R,
+    X1 = math:cos(La1)*math:cos(Lo1), Y1 = math:cos(La1)*math:sin(Lo1), Z1 = math:sin(La1),
+    X2 = math:cos(La2)*math:cos(Lo2), Y2 = math:cos(La2)*math:sin(Lo2), Z2 = math:sin(La2),
+    Dot = max(-1.0, min(1.0, X1*X2 + Y1*Y2 + Z1*Z2)),
+    math:acos(Dot) * 6371000.0.
