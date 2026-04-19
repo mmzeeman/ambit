@@ -119,6 +119,32 @@ disk_center_same_cell_test() ->
     C2 = triveil:disk_center(Loc2),
     ?assertEqual(C1, C2).
 
+%% disk/4 with centroid mode returns a subset of corner mode
+disk_mode_centroid_subset_test() ->
+    Loc = {52.3676, 4.9041},
+    Res = 13,
+    Diam = 1000,
+    CornerCodes = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
+    CentroidCodes = lists:sort(triveil:disk(Loc, Res, Diam, centroid)),
+    %% centroid mode should return fewer (or equal) codes
+    ?assert(length(CentroidCodes) =< length(CornerCodes),
+            io_lib:format("centroid (~B) should be <= corner (~B)",
+                          [length(CentroidCodes), length(CornerCodes)])),
+    %% every centroid code should also appear in corner codes
+    lists:foreach(fun(C) ->
+        ?assert(lists:member(C, CornerCodes),
+                io_lib:format("centroid code ~s not in corner set", [C]))
+    end, CentroidCodes).
+
+%% disk/3 (no mode) should behave like corner mode
+disk_default_mode_test() ->
+    Loc = {52.3676, 4.9041},
+    Res = 13,
+    Diam = 1000,
+    Default = lists:sort(triveil:disk(Loc, Res, Diam)),
+    Corner = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
+    ?assertEqual(Default, Corner).
+
 great_circle_m({Lat1, Lon1}, {Lat2, Lon2}) ->
     D2R = 0.017453292519943295,
     Lo1 = Lon1 * D2R, La1 = Lat1 * D2R,

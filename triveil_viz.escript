@@ -7,7 +7,7 @@ main([LatStr, LonStr, ResStr]) ->
         Lon = parse_float(LonStr),
         Res = list_to_integer(ResStr),
         io:format("Generating visualization for ~f, ~f at res ~p...~n", [Lat, Lon, Res]),
-        generate_viz(Lat, Lon, Res, undefined)
+        generate_viz(Lat, Lon, Res, undefined, corner)
     catch
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
@@ -18,19 +18,37 @@ main([LatStr, LonStr, ResStr, DiamStr]) ->
         Lon = parse_float(LonStr),
         Res = list_to_integer(ResStr),
         Diam = parse_float(DiamStr),
-        io:format("Generating visualization for ~f, ~f at res ~p with ~f m disk...~n",
+        io:format("Generating visualization for ~f, ~f at res ~p with ~f m disk (corner mode)...~n",
                   [Lat, Lon, Res, Diam]),
-        generate_viz(Lat, Lon, Res, Diam)
+        generate_viz(Lat, Lon, Res, Diam, corner)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
+main([LatStr, LonStr, ResStr, DiamStr, ModeStr]) ->
+    try
+        Lat = parse_float(LatStr),
+        Lon = parse_float(LonStr),
+        Res = list_to_integer(ResStr),
+        Diam = parse_float(DiamStr),
+        Mode = parse_mode(ModeStr),
+        io:format("Generating visualization for ~f, ~f at res ~p with ~f m disk (~s mode)...~n",
+                  [Lat, Lon, Res, Diam, ModeStr]),
+        generate_viz(Lat, Lon, Res, Diam, Mode)
     catch
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
 main(_) ->
-    io:format("Usage: ./triveil_viz.escript <lat> <lon> <res> [diameter_m]~n"),
+    io:format("Usage: ./triveil_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
+    io:format("~n"),
+    io:format("  mode: corner   - include triangle if at least one corner is within the disk (default)~n"),
+    io:format("        centroid - include triangle only if its centroid is within the disk~n"),
     io:format("~n"),
     io:format("Examples:~n"),
     io:format("  ./triveil_viz.escript 52.3676 4.9041 10~n"),
     io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000~n"),
+    io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000 centroid~n"),
     io:format("~n"),
     io:format("When diameter_m is given, the visualization shows the disk of~n"),
     io:format("triangular cells that approximate a circle of that diameter.~n"),
@@ -41,7 +59,11 @@ parse_float(S) ->
     catch error:badarg -> float(list_to_integer(S))
     end.
 
-generate_viz(Lat, Lon, Res, MaybeDiam) ->
+parse_mode("corner") -> corner;
+parse_mode("centroid") -> centroid;
+parse_mode(Other) -> erlang:error({bad_mode, Other}).
+
+generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
     Code = triveil:encode({Lat, Lon}, Res),
     Parent = triveil:parent(Code),
     GrandParent = triveil:parent(Parent),
@@ -64,7 +86,8 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
     {DiskData, DiskInfo} = case MaybeDiam of
         undefined -> {[], ""};
         Diam ->
-            DiskCodes = triveil:disk({Lat, Lon}, Res, Diam),
+            DiskCodes = triveil:disk({Lat, Lon}, Res, Diam, Mode),
+            ModeStr = atom_to_list(Mode),
             io:format("Disk contains ~p codes at level ~p~n", [length(DiskCodes), Res]),
             DLayer = [to_json(DC, "#e040e0", 1, 0.35) || DC <- DiskCodes],
             Info = io_lib:format(
@@ -75,9 +98,10 @@ generate_viz(Lat, Lon, Res, MaybeDiam) ->
                 "Diameter: ~f m<br>"
                 "Level: ~p<br>"
                 "Codes: ~p<br>"
+                "Mode: ~s<br>"
                 "Optimal level: ~p"
                 "</div>",
-                [Diam, Res, length(DiskCodes), triveil:optimal_level(Diam)]),
+                [Diam, Res, length(DiskCodes), ModeStr, triveil:optimal_level(Diam)]),
             {DLayer, Info}
     end,
 

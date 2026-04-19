@@ -7,7 +7,7 @@
     encode/2, encode/1,
     decode/1,
     orthocenter/1,
-    disk/2, disk/3,
+    disk/2, disk/3, disk/4,
     disk_center/1,
     optimal_level/1,
     parent/1,
@@ -16,6 +16,9 @@
     neighbors_2/1,
     from_xyz/1
 ]).
+
+-type disk_mode() :: corner | centroid.
+-export_type([disk_mode/0]).
 
 -on_load(init_persistent_terms/0).
 
@@ -71,7 +74,7 @@ disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), Diam
             try decode(Code) of
                 {Lat, Lon} ->
                     Res = byte_size(Digits),
-                    disk_from_center({Lat, Lon}, Res, DiameterMeters)
+                    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner)
             catch
                 _:_ ->
                     erlang:error(badarg)
@@ -84,7 +87,24 @@ disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(
 
 disk({Lat, Lon}, Res, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
-    disk_from_center({Lat, Lon}, Res, DiameterMeters).
+    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner).
+
+%% @doc Like `disk/3' but with a mode option to control how triangles are
+%% selected for inclusion in the disk.
+%%
+%% Mode can be:
+%%   `corner'   – include the triangle when at least one corner or its
+%%                centroid falls within the radius (default, gives a
+%%                slightly larger coverage).
+%%   `centroid' – include the triangle only when its centroid falls
+%%                within the radius (tighter fit).
+-spec disk({Lat :: float(), Lon :: float()}, Res :: pos_integer(),
+           DiameterMeters :: number(), Mode :: disk_mode()) -> [binary()].
+disk({Lat, Lon}, Res, DiameterMeters, Mode)
+  when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0,
+       is_number(DiameterMeters), DiameterMeters >= 0,
+       (Mode =:= corner orelse Mode =:= centroid) ->
+    disk_from_center({Lat, Lon}, Res, DiameterMeters, Mode).
 
 %% @doc Return the resolution level whose triangular cells best match the
 %% given diameter in meters. At this level, `disk/3' returns the fewest
@@ -117,7 +137,7 @@ disk_center({Lat, Lon}) ->
     PrivacyCode = encode({Lat, Lon}, ?PRIVACY_CENTER_RES),
     orthocenter(PrivacyCode).
 
-disk_from_center(Center, Res, DiameterMeters) ->
+disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
     %% resolution so that the circle does not shift when the user
     %% changes the disk resolution.
@@ -126,9 +146,9 @@ disk_from_center(Center, Res, DiameterMeters) ->
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:from_list([StartCode], [{version, 2}]),
     Queue0 = queue:from_list([StartCode]),
-    disk_bfs(DiskCenter, RadiusMeters, Queue0, Visited0, [StartCode]).
+    disk_bfs(DiskCenter, RadiusMeters, Mode, Queue0, Visited0, [StartCode]).
 
-disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
+disk_bfs(Center, RadiusMeters, Mode, Queue0, Visited, Acc) ->
     case queue:out(Queue0) of
         {empty, _} ->
             Acc;
@@ -140,7 +160,7 @@ disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
                             {Q0, V0, A0};
                         false ->
                             V1 = sets:add_element(NCode, V0),
-                            case any_corner_within(Center, NCode, RadiusMeters) of
+                            case within(Center, NCode, RadiusMeters, Mode) of
                                 true -> {queue:in(NCode, Q0), V1, [NCode | A0]};
                                 false -> {Q0, V1, A0}
                             end
@@ -149,8 +169,16 @@ disk_bfs(Center, RadiusMeters, Queue0, Visited, Acc) ->
                 {Queue1, Visited, Acc},
                 neighbors(Code)
             ),
-            disk_bfs(Center, RadiusMeters, Queue2, Visited1, Acc1)
+            disk_bfs(Center, RadiusMeters, Mode, Queue2, Visited1, Acc1)
     end.
+
+%% @doc Check if a triangle should be included in the disk.
+%% In `corner' mode a triangle is included when any corner OR the centroid
+%% falls within the radius.  In `centroid' mode only the centroid is checked.
+within(Center, Code, RadiusMeters, corner) ->
+    any_corner_within(Center, Code, RadiusMeters);
+within(Center, Code, RadiusMeters, centroid) ->
+    centroid_within(Center, Code, RadiusMeters).
 
 %% @doc Check if the triangle overlaps the disk.
 %% A triangle overlaps when any corner OR the centroid is within the radius.
@@ -162,6 +190,10 @@ any_corner_within(Center, Code, RadiusMeters) ->
         great_circle_distance(Center, Corner) =< RadiusMeters
     end, Corners)
     orelse
+    great_circle_distance(Center, decode(Code)) =< RadiusMeters.
+
+%% @doc Check if the triangle's centroid is within the disk.
+centroid_within(Center, Code, RadiusMeters) ->
     great_circle_distance(Center, decode(Code)) =< RadiusMeters.
 
 great_circle_distance(P1, P2) ->
