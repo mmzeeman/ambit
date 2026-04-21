@@ -1,4 +1,4 @@
-{application, hexveil,
+{application, ambit,
  [{description, "A privacy-preserving hierarchical location encoding"},
   {vsn, "0.0.1"},
   {applications,
@@ -8,5 +8,5 @@
   {env,[]},
   {modules, []},
   {licenses, ["Apache 2.0"]},
-  {links, [{"Github", "https://github.com/mmzeeman/hexveil"}]}
+  {links, [{"Github", "https://github.com/mmzeeman/ambit"}]}
  ]}.

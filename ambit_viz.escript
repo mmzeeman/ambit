@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%%! -pa _build/default/lib/hexveil/ebin
+%%! -pa _build/default/lib/ambit/ebin
 
 main([LatStr, LonStr, ResStr]) ->
     try
@@ -40,19 +40,19 @@ main([LatStr, LonStr, ResStr, DiamStr, ModeStr]) ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
 main(_) ->
-    io:format("Usage: ./triveil_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
+    io:format("Usage: ./ambit_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
     io:format("~n"),
     io:format("  mode: corner   - include triangle if at least one corner is within the disk (default)~n"),
     io:format("        centroid - include triangle only if its centroid is within the disk~n"),
     io:format("~n"),
     io:format("Examples:~n"),
-    io:format("  ./triveil_viz.escript 52.3676 4.9041 10~n"),
-    io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000~n"),
-    io:format("  ./triveil_viz.escript 52.3676 4.9041 13 1000 centroid~n"),
+    io:format("  ./ambit_viz.escript 52.3676 4.9041 10~n"),
+    io:format("  ./ambit_viz.escript 52.3676 4.9041 13 1000~n"),
+    io:format("  ./ambit_viz.escript 52.3676 4.9041 13 1000 centroid~n"),
     io:format("~n"),
     io:format("When diameter_m is given, the visualization shows the disk of~n"),
     io:format("triangular cells that approximate a circle of that diameter.~n"),
-    io:format("Use triveil:optimal_level/1 to find the best resolution.~n").
+    io:format("Use ambit:optimal_level/1 to find the best resolution.~n").
 
 parse_float(S) ->
     try list_to_float(S)
@@ -64,13 +64,13 @@ parse_mode("centroid") -> centroid;
 parse_mode(Other) -> erlang:error({bad_mode, Other}).
 
 generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
-    Code = triveil:encode({Lat, Lon}, Res),
-    Parent = triveil:parent(Code),
-    GrandParent = triveil:parent(Parent),
+    Code = ambit:encode({Lat, Lon}, Res),
+    Parent = ambit:parent(Code),
+    GrandParent = ambit:parent(Parent),
     
     Siblings = [<<Parent/binary, (N + $0)>> || N <- lists:seq(0, 3)],
-    N1 = triveil:neighbors(Code),
-    N2 = triveil:neighbors_2(Code),
+    N1 = ambit:neighbors(Code),
+    N2 = ambit:neighbors_2(Code),
     
     %% Base layers: hierarchy + neighbors
     BaseData = [
@@ -86,7 +86,7 @@ generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
     {DiskData, DiskInfo} = case MaybeDiam of
         undefined -> {[], ""};
         Diam ->
-            DiskCodes = triveil:disk({Lat, Lon}, Res, Diam, Mode),
+            DiskCodes = ambit:disk({Lat, Lon}, Res, Diam, Mode),
             ModeStr = atom_to_list(Mode),
             io:format("Disk contains ~p codes at level ~p~n", [length(DiskCodes), Res]),
             DLayer = [to_json(DC, "#e040e0", 1, 0.35) || DC <- DiskCodes],
@@ -101,7 +101,7 @@ generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
                 "Mode: ~s<br>"
                 "Optimal level: ~p"
                 "</div>",
-                [Diam, Res, length(DiskCodes), ModeStr, triveil:optimal_level(Diam)]),
+                [Diam, Res, length(DiskCodes), ModeStr, ambit:optimal_level(Diam)]),
             {DLayer, Info}
     end,
 
@@ -116,11 +116,11 @@ generate_viz(Lat, Lon, Res, MaybeDiam, Mode) ->
         [Lat, Lon, Lat, Lon]),
 
     %% Reference circle centered on the privacy center (level-15 orthocenter)
-    %% This matches the disk center used by triveil:disk/3
+    %% This matches the disk center used by ambit:disk/3
     CircleJs = case MaybeDiam of
         undefined -> "";
         D ->
-            {OLat, OLon} = triveil:disk_center({Lat, Lon}),
+            {OLat, OLon} = ambit:disk_center({Lat, Lon}),
             io_lib:format(
                 "L.circle([~f, ~f], {radius: ~f, color: '#e040e0', weight: 2, "
                 "dashArray: '6,4', fill: false, interactive: false}).addTo(map)"
@@ -169,11 +169,11 @@ data.forEach(d => {
 ~s
 </script></body></html>", [DiskInfo, Lat, Lon, string:join(Data, ","), CircleJs, RedDotJs]),
     
-    file:write_file("triveil_viz.html", Html),
-    io:format("Generated triveil_viz.html~n").
+    file:write_file("ambit_viz.html", Html),
+    io:format("Generated ambit_viz.html~n").
 
 to_json(Code, Color, Weight, Opacity) ->
-    Coords = triveil:cell_geometry(Code),
+    Coords = ambit:cell_geometry(Code),
     CoordJson = "[" ++ string:join([io_lib:format("[~f, ~f]", [La, Lo]) || {La, Lo} <- Coords], ",") ++ "]",
     io_lib:format("{\"code\": \"~s\", \"color\": \"~s\", \"weight\": ~p, \"opacity\": ~f, \"coords\": ~s}",
                   [Code, Color, Weight, float(Opacity), CoordJson]).

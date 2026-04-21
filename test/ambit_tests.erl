@@ -1,5 +1,5 @@
 
--module(triveil_tests).
+-module(ambit_tests).
 -include_lib("eunit/include/eunit.hrl").
 
 %% Round-trip encode/decode
@@ -14,8 +14,8 @@ roundtrip_test() ->
     ],
     lists:foreach(fun({Lat, Lon}) ->
         Res = 7,
-        Code = triveil:encode({Lat, Lon}, Res),
-        {DLat, DLon} = triveil:decode(Code),
+        Code = ambit:encode({Lat, Lon}, Res),
+        {DLat, DLon} = ambit:decode(Code),
         
         %% Triangles at Res 7 are small, but let's be generous with error
         MaxErr = 1.0,
@@ -28,16 +28,16 @@ roundtrip_test() ->
 
 %% parent should remove one digit at the end
 parent_test() ->
-    Code = triveil:encode({20.0, 10.0}, 6),
-    Parent = triveil:parent(Code),
+    Code = ambit:encode({20.0, 10.0}, 6),
+    Parent = ambit:parent(Code),
     [_, Digits] = string:split(binary_to_list(Code), "-"),
     [_, Pdigits] = string:split(binary_to_list(Parent), "-"),
     ?assertEqual(length(Digits)-1, length(Pdigits)).
 
 %% neighbors returns codes for adjacent triangles
 neighbors_test() ->
-    Code = triveil:encode({20.0, 10.0}, 5),
-    N = triveil:neighbors(Code),
+    Code = ambit:encode({20.0, 10.0}, 5),
+    N = ambit:neighbors(Code),
     %% Triangle neighbors: could be 3 (edge) or 12 (including vertices)
     %% The implementation uses 12 directions.
     ?assert(length(N) > 0),
@@ -45,8 +45,8 @@ neighbors_test() ->
 
 %% cell_geometry returns 3 corner coordinates as {Lat, Lon} floats
 cell_geometry_test() ->
-    Code = triveil:encode({20.0, 10.0}, 6),
-    Corners = triveil:cell_geometry(Code),
+    Code = ambit:encode({20.0, 10.0}, 6),
+    Corners = ambit:cell_geometry(Code),
     ?assertEqual(3, length(Corners)),
     lists:foreach(fun({Lat, Lon}) ->
         ?assert(is_float(Lat)),
@@ -57,12 +57,12 @@ cell_geometry_test() ->
 neighbor_consistency_test() ->
     Coord = {52.3676, 4.9041},
     Res = 10,
-    Code = triveil:encode(Coord, Res),
-    {Lat, Lon} = triveil:decode(Code),
-    N1 = triveil:neighbors(Code),
+    Code = ambit:encode(Coord, Res),
+    {Lat, Lon} = ambit:decode(Code),
+    N1 = ambit:neighbors(Code),
     ?assert(length(N1) > 0),
     lists:foreach(fun(NCode) ->
-        {NLat, NLon} = triveil:decode(NCode),
+        {NLat, NLon} = ambit:decode(NCode),
         DLon = abs(NLon - Lon),
         ActualDLon = lists:min([DLon, abs(DLon - 360.0)]),
         case abs(NLat - Lat) < 1.0 andalso ActualDLon < 1.0 of
@@ -78,20 +78,20 @@ neighbor_consistency_test() ->
 optimal_level_test() ->
     %% Empirical cell diameters (at Amsterdam):
     %%   L13 ≈  969 m, L14 ≈ 485 m, L16 ≈ 121 m
-    ?assertEqual(13, triveil:optimal_level(1000)),
-    ?assertEqual(14, triveil:optimal_level(500)),
-    ?assertEqual(16, triveil:optimal_level(100)).
+    ?assertEqual(13, ambit:optimal_level(1000)),
+    ?assertEqual(14, ambit:optimal_level(500)),
+    ?assertEqual(16, ambit:optimal_level(100)).
 
 %% optimal_level clamps to valid range
 optimal_level_clamp_test() ->
-    ?assertEqual(1,  triveil:optimal_level(100000000)),  %% huge → level 1
-    ?assertEqual(24, triveil:optimal_level(0.001)).      %% tiny → level 24
+    ?assertEqual(1,  ambit:optimal_level(100000000)),  %% huge → level 1
+    ?assertEqual(24, ambit:optimal_level(0.001)).      %% tiny → level 24
 
 %% optimal_level result can be used directly with disk/3
 optimal_level_disk_integration_test() ->
     Diameter = 1000,
-    Res = triveil:optimal_level(Diameter),
-    Codes = triveil:disk({52.3676, 4.9041}, Res, Diameter),
+    Res = ambit:optimal_level(Diameter),
+    Codes = ambit:disk({52.3676, 4.9041}, Res, Diameter),
     %% At optimal level, disk should return a small number of codes (1-4)
     ?assert(length(Codes) >= 1 andalso length(Codes) =< 10,
             io_lib:format("Expected 1-10 codes at optimal level ~B, got ~B", [Res, length(Codes)])).
@@ -100,7 +100,7 @@ optimal_level_disk_integration_test() ->
 %% the caller intends to use for disk tiles
 disk_center_stable_test() ->
     Loc = {52.37456, 4.87249},
-    Center = triveil:disk_center(Loc),
+    Center = ambit:disk_center(Loc),
     ?assert(is_tuple(Center)),
     {CLat, CLon} = Center,
     ?assert(is_float(CLat)),
@@ -115,8 +115,8 @@ disk_center_same_cell_test() ->
     %% Two nearby points that should fall in the same level-15 triangle
     Loc1 = {52.37456, 4.87249},
     Loc2 = {52.37457, 4.87250},
-    C1 = triveil:disk_center(Loc1),
-    C2 = triveil:disk_center(Loc2),
+    C1 = ambit:disk_center(Loc1),
+    C2 = ambit:disk_center(Loc2),
     ?assertEqual(C1, C2).
 
 %% disk/4 with centroid mode returns a subset of corner mode
@@ -124,8 +124,8 @@ disk_mode_centroid_subset_test() ->
     Loc = {52.3676, 4.9041},
     Res = 13,
     Diam = 1000,
-    CornerCodes = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
-    CentroidCodes = lists:sort(triveil:disk(Loc, Res, Diam, centroid)),
+    CornerCodes = lists:sort(ambit:disk(Loc, Res, Diam, corner)),
+    CentroidCodes = lists:sort(ambit:disk(Loc, Res, Diam, centroid)),
     %% centroid mode should return fewer (or equal) codes
     ?assert(length(CentroidCodes) =< length(CornerCodes),
             io_lib:format("centroid (~B) should be <= corner (~B)",
@@ -141,8 +141,8 @@ disk_default_mode_test() ->
     Loc = {52.3676, 4.9041},
     Res = 13,
     Diam = 1000,
-    Default = lists:sort(triveil:disk(Loc, Res, Diam)),
-    Corner = lists:sort(triveil:disk(Loc, Res, Diam, corner)),
+    Default = lists:sort(ambit:disk(Loc, Res, Diam)),
+    Corner = lists:sort(ambit:disk(Loc, Res, Diam, corner)),
     ?assertEqual(Default, Corner).
 
 great_circle_m({Lat1, Lon1}, {Lat2, Lon2}) ->

@@ -1,7 +1,7 @@
-%% @doc Triveil - Icosahedral Gnomonic Aperture 4 Triangles.
+%% @doc Ambit - Icosahedral Gnomonic Aperture 4 Triangles.
 %% Uses the exact same projection engine as Hexveil for alignment.
 
--module(triveil).
+-module(ambit).
 
 -export([
     encode/2, encode/1,
@@ -114,9 +114,9 @@ disk({Lat, Lon}, Res, DiameterMeters, Mode)
 %% At level 1, cell diameter is approximately 4,000 km.
 %%
 %% Example:
-%%   triveil:optimal_level(1000).   %% => 13  (cell ≈ 969 m)
-%%   triveil:optimal_level(500).    %% => 14  (cell ≈ 485 m)
-%%   triveil:optimal_level(100).    %% => 16  (cell ≈ 121 m)
+%%   ambit:optimal_level(1000).   %% => 13  (cell ≈ 969 m)
+%%   ambit:optimal_level(500).    %% => 14  (cell ≈ 485 m)
+%%   ambit:optimal_level(100).    %% => 16  (cell ≈ 121 m)
 -spec optimal_level(DiameterMeters :: number()) -> 1..24.
 optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0 ->
     %% Cell diameter at level 1 ≈ 4,003,017 m (empirically measured
