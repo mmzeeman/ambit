@@ -136,11 +136,19 @@ AllNeighbors = ambit:neighbors_2(Code).
 | :---: | :---: |
 | ![Edge Neighbors](docs/neighbors.svg) | ![All Neighbors](docs/neighbors_2.svg) |
 
-### Generating the Visualization
+#### Map Context
+To see how these cells align with real-world features, here is an overlay of a cell and its 12 neighbors over a stylized map of Amsterdam:
+
+![Map Overlay](docs/map_overlay.svg)
+
+### Generating the Visualization (Live Map)
+While this README uses static SVGs, you can explore the grid interactively using the provided Leaflet-based tool.
+
 Run the provided escript to generate `ambit_viz.html`:
 ```bash
 ./ambit_viz.escript 52.3676 4.9041 15
 ```
+Open the resulting file in your browser to see the grid overlaid on **OpenStreetMap** with full zoom and pan support.
 
 ---
 
