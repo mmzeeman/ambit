@@ -84,6 +84,36 @@ Ambit supports two modes for selecting triangles:
 
 ---
 
+## Installation
+
+Add Ambit to your `rebar.config` dependencies:
+
+```erlang
+{deps, [
+    {ambit, {git, "https://github.com/mmzeeman/ambit.git", {branch, "main"}}}
+]}.
+```
+
+Ambit is written in pure Erlang and has **zero external dependencies**.
+
+---
+
+## API Reference
+
+| Function | Description |
+| :--- | :--- |
+| `encode({Lat, Lon}, Res)` | Encodes a coordinate into a triangular Cell ID. |
+| `decode(Code)` | Decodes a Cell ID into its centroid `{Lat, Lon}`. |
+| `orthocenter(Code)` | Returns the `{Lat, Lon}` of the triangle's orthocenter. |
+| `parent(Code)` | Returns the ID of the parent cell (Level N-1). |
+| `neighbors(Code)` | Returns the 3 immediate edge-adjacent neighbors. |
+| `neighbors_2(Code)` | Returns all 12 surrounding neighbors (edge + vertex). |
+| `disk(Coord, Res, Radius, Mode)` | Returns a list of codes covering a circular area. |
+| `optimal_level(Radius)` | Returns the best resolution level for a given radius. |
+| `cell_geometry(Code)` | Returns the `{Lat, Lon}` coordinates of the triangle's corners. |
+
+---
+
 ## Usage
 
 ### Encoding a Coordinate
@@ -95,9 +125,16 @@ Code = ambit:encode({52.3676, 4.9041}, 17).
 
 ### Finding Neighbors
 ```erlang
-% Get the immediate neighbors of a cell
+% Get the 3 immediate edge-adjacent neighbors
 Neighbors = ambit:neighbors(Code).
+
+% Get all 12 surrounding neighbors (including vertex-adjacent)
+AllNeighbors = ambit:neighbors_2(Code).
 ```
+
+| Edge Neighbors (3) | All Neighbors (12) |
+| :---: | :---: |
+| ![Edge Neighbors](docs/neighbors.svg) | ![All Neighbors](docs/neighbors_2.svg) |
 
 ### Generating the Visualization
 Run the provided escript to generate `ambit_viz.html`:
@@ -129,11 +166,18 @@ covers the circle.
     *   `corner`: (Default) Guaranteed coverage. If any part of the triangle touches the
         radius, it's included.
     *   `centroid`: Optimized fit. Only included if the center of the triangle is inside.
-3.  **Privacy Centering**: By default, the disk is **not** centered on your exact
+3.  **Multi-Resolution Support**: You can generate disks at any resolution.
+    *   **Coarse Level**: Lower resolutions (e.g. L12) result in fewer codes and faster
+        database queries but lower precision.
+    *   **Fine Level**: Higher resolutions (e.g. L18) provide high precision and tighter
+        bounds but require storing and querying more codes.
+    *   *Note: For the Dual-Disk query to work, both the item and the viewer must use
+        the same resolution level.*
+4.  **Privacy Centering**: By default, the disk is **not** centered on your exact
     GPS coordinates. Instead, it is snapped to the **orthocenter** of a coarser
     parent cell. This ensures that everyone within the same neighborhood generates the
     *exact same set of disk codes*, preventing high-precision tracking.
-4.  **Optimal Resolution**: Use `ambit:optimal_level(Diameter)` to find the resolution
+5.  **Optimal Resolution**: Use `ambit:optimal_level(Diameter)` to find the resolution
     where the triangles are roughly the same size as your search radius. This minimizes
     the number of codes you need to store and query.
 
