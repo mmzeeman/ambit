@@ -14,7 +14,8 @@
     cell_geometry/1,
     neighbors/1,
     neighbors_2/1,
-    from_xyz/1
+    from_xyz/1,
+    shape/2, shape/3
 ]).
 
 -type disk_mode() :: corner | centroid.
@@ -136,6 +137,25 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
 disk_center({Lat, Lon}) ->
     PrivacyCode = encode({Lat, Lon}, ?PRIVACY_CENTER_RES),
     orthocenter(PrivacyCode).
+
+%% @doc Returns codes at Res that overlap the GeoJSON shape, using corner mode.
+-spec shape(GeoJSON :: map(), Res :: pos_integer()) -> [binary()].
+shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
+
+%% @doc Returns codes at Res that overlap the GeoJSON shape.
+%% Mode can be `corner' (any corner or centroid inside polygon) or
+%% `centroid' (centroid only).
+-spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
+shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
+    [Outer | _] = Rings,
+    LatLonRings = [geojson_ring_to_latlon(R) || R <- Rings],
+    Seeds = polygon_seeds(Outer, Res),
+    shape_bfs(LatLonRings, Mode, Seeds);
+shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode) ->
+    lists:usort(lists:flatmap(
+        fun(Rings) ->
+            shape(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => Rings}, Res, Mode)
+        end, Polys)).
 
 disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
@@ -385,6 +405,97 @@ nearest_face({X,Y,Z}=XYZ, [{Cx,Cy,Cz}|Rest], Idx, MaxD, MaxIdx) ->
     D = X*Cx + Y*Cy + Z*Cz,
     if D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
        true -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
+    end.
+
+%% --- Shape / GeoJSON helpers ---
+
+polygon_seeds(OuterRing, Res) ->
+    LatLons = geojson_ring_to_latlon(OuterRing),
+    case LatLons of
+        [] -> [];
+        _ ->
+            {SumLat, SumLon, N} = lists:foldl(
+                fun({Lat, Lon}, {SLat, SLon, Cnt}) -> {SLat+Lat, SLon+Lon, Cnt+1} end,
+                {0.0, 0.0, 0}, LatLons),
+            Centroid = {SumLat/N, SumLon/N},
+            VertexCells = lists:usort([encode(P, Res) || P <- LatLons]),
+            lists:usort([encode(Centroid, Res) | VertexCells])
+    end.
+
+geojson_ring_to_latlon(Ring) ->
+    [{lat_of(V), lon_of(V)} || V <- Ring].
+
+lat_of([_Lon, Lat | _]) -> Lat.
+lon_of([Lon | _]) -> Lon.
+
+within_shape(Rings, Code, corner) ->
+    Corners = cell_geometry(Code),
+    Centroid = decode(Code),
+    lists:any(fun(P) -> point_in_polygon(P, Rings) end, [Centroid | Corners]);
+within_shape(Rings, Code, centroid) ->
+    point_in_polygon(decode(Code), Rings).
+
+point_in_polygon({Lat, Lon}, [Outer | Holes]) ->
+    ray_cast({Lat, Lon}, Outer) andalso
+    not lists:any(fun(Hole) -> ray_cast({Lat, Lon}, Hole) end, Holes).
+
+ray_cast({Lat, Lon}, Ring) ->
+    Pairs = lists:zip(Ring, lists:nthtail(1, Ring) ++ [hd(Ring)]),
+    Crossings = lists:foldl(
+        fun({{ALat, ALon0}, {BLat, BLon0}}, Cnt) ->
+            %% Normalise longitudes relative to the test point to handle wrap-around
+            ALon = normalise_lon(ALon0, Lon),
+            BLon = normalise_lon(BLon0, Lon),
+            InY = (ALat =< Lat andalso BLat > Lat) orelse
+                  (BLat =< Lat andalso ALat > Lat),
+            case InY of
+                false -> Cnt;
+                true ->
+                    %% X coordinate of the crossing
+                    T = (Lat - ALat) / (BLat - ALat),
+                    CrossLon = ALon + T * (BLon - ALon),
+                    case CrossLon > Lon of
+                        true  -> Cnt + 1;
+                        false -> Cnt
+                    end
+            end
+        end,
+        0, Pairs),
+    (Crossings rem 2) =:= 1.
+
+normalise_lon(VertLon, TestLon) ->
+    DLon = VertLon - TestLon,
+    if DLon > 180.0  -> VertLon - 360.0;
+       DLon < -180.0 -> VertLon + 360.0;
+       true           -> VertLon
+    end.
+
+shape_bfs(Rings, Mode, Seeds) ->
+    Visited0 = sets:from_list(Seeds, [{version, 2}]),
+    Queue0 = queue:from_list(Seeds),
+    InitAcc = [S || S <- Seeds, within_shape(Rings, S, Mode)],
+    shape_bfs_loop(Rings, Mode, Queue0, Visited0, InitAcc).
+
+shape_bfs_loop(Rings, Mode, Queue0, Visited, Acc) ->
+    case queue:out(Queue0) of
+        {empty, _} -> Acc;
+        {{value, Code}, Queue1} ->
+            {Queue2, Visited1, Acc1} = lists:foldl(
+                fun(NCode, {Q, V, A}) ->
+                    case sets:is_element(NCode, V) of
+                        true -> {Q, V, A};
+                        false ->
+                            V1 = sets:add_element(NCode, V),
+                            case within_shape(Rings, NCode, Mode) of
+                                true  -> {queue:in(NCode, Q), V1, [NCode | A]};
+                                false -> {Q, V1, A}
+                            end
+                    end
+                end,
+                {Queue1, Visited, Acc},
+                neighbors(Code)
+            ),
+            shape_bfs_loop(Rings, Mode, Queue2, Visited1, Acc1)
     end.
 
 %% --- Persistent Data ---
