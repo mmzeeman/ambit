@@ -276,6 +276,7 @@ fetch_nominatim(Query) ->
         {error, Reason} -> erlang:error({nominatim_request_failed, {ssl_start_failed, Reason}})
     end,
     QueryString = uri_string:compose_query([{"q", Query}, {"polygon_geojson", "1"}, {"format", "jsonv2"}, {"limit", "1"}]),
+    Url = "https://nominatim.openstreetmap.org/search?" ++ QueryString,
     io:format("Fetching: ~s~n", [Url]),
     case httpc:request(
         get,
