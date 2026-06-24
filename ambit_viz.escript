@@ -255,10 +255,15 @@ geojson_center(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := [FirstPo
     geojson_center(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => FirstPoly}).
 
 fetch_nominatim(Query) ->
-    {ok, _} = application:ensure_all_started(inets),
-    {ok, _} = application:ensure_all_started(ssl),
+    case application:ensure_all_started(inets) of
+        {ok, _} -> ok;
+        {error, Reason} -> erlang:error({nominatim_request_failed, {inets_start_failed, Reason}})
+    end,
+    case application:ensure_all_started(ssl) of
+        {ok, _} -> ok;
+        {error, Reason} -> erlang:error({nominatim_request_failed, {ssl_start_failed, Reason}})
+    end,
     QueryString = uri_string:compose_query([{"q", Query}, {"polygon_geojson", "1"}, {"format", "jsonv2"}, {"limit", "1"}]),
-    Url = "https://nominatim.openstreetmap.org/search?" ++ QueryString,
     io:format("Fetching: ~s~n", [Url]),
     case httpc:request(
         get,
