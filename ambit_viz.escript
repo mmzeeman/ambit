@@ -256,23 +256,29 @@ geojson_center(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := [FirstPo
 fetch_nominatim(Query) ->
     {ok, _} = application:ensure_all_started(inets),
     {ok, _} = application:ensure_all_started(ssl),
-    QueryString = uri_string:compose_query([{"q", Query}, {"polygon_geojson", "1"}, {"format", "jsonv2"}]),
+    QueryString = uri_string:compose_query([{"q", Query}, {"polygon_geojson", "1"}, {"format", "jsonv2"}, {"limit", "1"}]),
     Url = "https://nominatim.openstreetmap.org/search?" ++ QueryString,
     io:format("Fetching: ~s~n", [Url]),
-    {ok, {{_, 200, _}, _Headers, Body}} = httpc:request(
+    case httpc:request(
         get,
-        {Url, [{"User-Agent", "ambit_viz escript"}]},
+        {Url, [{"User-Agent", "ambit_viz/1.0 (https://github.com/mmzeeman/ambit)"}]},
         [{ssl, [{verify, verify_peer}, {cacerts, public_key:cacerts_get()}]}],
-        []),
-    Results = json:decode(iolist_to_binary(Body)),
-    case Results of
-        [] ->
-            erlang:error({nominatim_no_results, Query});
-        [First | _] ->
-            case maps:find(<<"geojson">>, First) of
-                {ok, GeoJSON} -> GeoJSON;
-                error -> erlang:error({nominatim_no_geojson, First})
-            end
+        []) of
+        {ok, {{_, 200, _}, _Headers, Body}} ->
+            Results = json:decode(iolist_to_binary(Body)),
+            case Results of
+                [] ->
+                    erlang:error({nominatim_no_results, Query});
+                [First | _] ->
+                    case maps:find(<<"geojson">>, First) of
+                        {ok, GeoJSON} -> GeoJSON;
+                        error -> erlang:error({nominatim_no_geojson, First})
+                    end
+            end;
+        {ok, {{_, Status, Reason}, _Headers, _Body}} ->
+            erlang:error({nominatim_http_error, Status, Reason});
+        {error, Reason} ->
+            erlang:error({nominatim_request_failed, Reason})
     end.
 
 geojson_to_leaflet_js(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}) ->
