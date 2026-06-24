@@ -22,6 +22,29 @@ main(["shape", TermStr, ResStr, ModeStr]) ->
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
+main(["nominatim", QueryStr, ResStr]) ->
+    try
+        Res = list_to_integer(ResStr),
+        io:format("Searching nominatim for: ~s~n", [QueryStr]),
+        GeoJSON = fetch_nominatim(QueryStr),
+        io:format("Generating shape visualization at res ~p (corner mode)...~n", [Res]),
+        generate_shape_viz(GeoJSON, Res, corner)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
+main(["nominatim", QueryStr, ResStr, ModeStr]) ->
+    try
+        Res = list_to_integer(ResStr),
+        Mode = parse_mode(ModeStr),
+        io:format("Searching nominatim for: ~s~n", [QueryStr]),
+        GeoJSON = fetch_nominatim(QueryStr),
+        io:format("Generating shape visualization at res ~p (~s mode)...~n", [Res, ModeStr]),
+        generate_shape_viz(GeoJSON, Res, Mode)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
 main([LatStr, LonStr, ResStr]) ->
     try
         Lat = parse_float(LatStr),
@@ -64,6 +87,7 @@ main(_) ->
     io:format("Usage:~n"),
     io:format("  ./ambit_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
     io:format("  ./ambit_viz.escript shape <erlang_geojson> <res> [mode]~n"),
+    io:format("  ./ambit_viz.escript nominatim <query> <res> [mode]~n"),
     io:format("~n"),
     io:format("  mode: corner   - include triangle if at least one corner is within the disk (default)~n"),
     io:format("        centroid - include triangle only if its centroid is within the disk~n"),
@@ -76,9 +100,15 @@ main(_) ->
     io:format("  ./ambit_viz.escript shape '#{<<\"type\">> => <<\"Polygon\">>, <<\"coordinates\">> => [[[4.8,52.3],[5.1,52.3],[5.1,52.5],[4.8,52.5],[4.8,52.3]]]}' 12~n"),
     io:format("  ./ambit_viz.escript shape '#{<<\"type\">> => <<\"Polygon\">>, <<\"coordinates\">> => [[[4.8,52.3],[5.1,52.3],[5.1,52.5],[4.8,52.5],[4.8,52.3]]]}' 12 centroid~n"),
     io:format("~n"),
+    io:format("  ./ambit_viz.escript nominatim 'Hoofddorp,Netherlands' 12~n"),
+    io:format("  ./ambit_viz.escript nominatim 'Hoofddorp,Netherlands' 12 centroid~n"),
+    io:format("~n"),
     io:format("The erlang_geojson argument is an Erlang map term (as printed in the shell),~n"),
     io:format("representing a GeoJSON Polygon or MultiPolygon geometry. Coordinates are~n"),
     io:format("[Lon, Lat] pairs following the GeoJSON convention.~n"),
+    io:format("~n"),
+    io:format("The nominatim query is sent to nominatim.openstreetmap.org and the first~n"),
+    io:format("result's polygon_geojson is used for the shape visualization.~n"),
     io:format("~n"),
     io:format("When diameter_m is given, the visualization shows the disk of~n"),
     io:format("triangular cells that approximate a circle of that diameter.~n"),
@@ -222,6 +252,28 @@ geojson_center(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := [Outer | _]})
     {SLat / N, SLon / N};
 geojson_center(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := [FirstPoly | _]}) ->
     geojson_center(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => FirstPoly}).
+
+fetch_nominatim(Query) ->
+    {ok, _} = application:ensure_all_started(inets),
+    {ok, _} = application:ensure_all_started(ssl),
+    QueryString = uri_string:compose_query([{"q", Query}, {"polygon_geojson", "1"}, {"format", "jsonv2"}]),
+    Url = "https://nominatim.openstreetmap.org/search?" ++ QueryString,
+    io:format("Fetching: ~s~n", [Url]),
+    {ok, {{_, 200, _}, _Headers, Body}} = httpc:request(
+        get,
+        {Url, [{"User-Agent", "ambit_viz escript"}]},
+        [{ssl, [{verify, verify_peer}, {cacerts, public_key:cacerts_get()}]}],
+        []),
+    Results = json:decode(iolist_to_binary(Body)),
+    case Results of
+        [] ->
+            erlang:error({nominatim_no_results, Query});
+        [First | _] ->
+            case maps:find(<<"geojson">>, First) of
+                {ok, GeoJSON} -> GeoJSON;
+                error -> erlang:error({nominatim_no_geojson, First})
+            end
+    end.
 
 geojson_to_leaflet_js(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}) ->
     RingsJs = [string:join(
