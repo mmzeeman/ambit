@@ -240,9 +240,10 @@ to_json(Code, Color, Weight, Opacity) ->
 
 parse_erlang_term(Str) ->
     {ok, Tokens, _} = erl_scan:string(Str ++ "."),
-    {ok, Exprs} = erl_parse:parse_exprs(Tokens),
-    {value, Val, _} = erl_eval:exprs(Exprs, []),
-    Val.
+    case erl_parse:parse_term(Tokens) of
+        {ok, Term} -> Term;
+        {error, Err} -> erlang:error({bad_term, Err})
+    end.
 
 geojson_center(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := [Outer | _]}) ->
     N = length(Outer),
