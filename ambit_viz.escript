@@ -245,12 +245,24 @@ parse_erlang_term(Str) ->
         {error, Err} -> erlang:error({bad_term, Err})
     end.
 
-geojson_center(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := [Outer | _]}) ->
-    N = length(Outer),
-    {SLon, SLat} = lists:foldl(
-        fun([Lo, La | _], {SLo, SLa}) -> {SLo + float(Lo), SLa + float(La)} end,
-        {0.0, 0.0}, Outer),
-    {SLat / N, SLon / N};
+geojson_center(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := [Outer0 | _]}) ->
+    Outer = case Outer0 of
+        [] -> [];
+        [First | _] ->
+            case lists:last(Outer0) of
+                First -> lists:sublist(Outer0, length(Outer0)-1);
+                _ -> Outer0
+            end
+    end,
+    case Outer of
+        [] -> erlang:error({bad_geojson, empty_coordinates});
+        _ ->
+            N = length(Outer),
+            {SLon, SLat} = lists:foldl(
+                fun([Lo, La | _], {SLo, SLa}) -> {SLo + float(Lo), SLa + float(La)} end,
+                {0.0, 0.0}, Outer),
+            {SLat / N, SLon / N}
+    end;
 geojson_center(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := [FirstPoly | _]}) ->
     geojson_center(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => FirstPoly}).
 
