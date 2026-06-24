@@ -147,10 +147,14 @@ shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 %% `centroid' (centroid only).
 -spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
 shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
-    [Outer | _] = Rings,
-    LatLonRings = [geojson_ring_to_latlon(R) || R <- Rings],
-    Seeds = polygon_seeds(Outer, Res),
-    shape_bfs(LatLonRings, Mode, Seeds);
+    case Rings of
+        [Outer | _] ->
+            LatLonRings = [geojson_ring_to_latlon(R) || R <- Rings],
+            Seeds = polygon_seeds(Outer, Res),
+            shape_bfs(LatLonRings, Mode, Seeds);
+        _ ->
+            erlang:error(badarg)
+    end;
 shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
