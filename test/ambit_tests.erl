@@ -197,3 +197,208 @@ shape_all_decodable_test() ->
         ?assert(is_float(Lat)),
         ?assert(is_float(Lon))
     end, Codes).
+
+parent_root_test() ->
+    ?assertEqual(<<"0-000">>, ambit:parent(<<"0-0000">>)),
+    ?assertEqual(<<"0-00">>, ambit:parent(<<"0-000">>)),
+    ?assertEqual(<<"0-0">>, ambit:parent(<<"0-00">>)),
+    ?assertEqual(<<"0-">>, ambit:parent(<<"0-0">>)),
+    ?assertEqual(<<"0-">>, ambit:parent(<<"0-">>)),
+    ok.
+
+% Test: Empty list returns empty ranges
+empty_list_test() ->
+    {ranges, Ranges} = ambit:codes_to_ranges([]),
+    ?assertEqual([], Ranges).
+
+% Test: Single code returns as-is
+single_code_test() ->
+    Code = <<"0-0">>,
+    {ranges, Ranges} = ambit:codes_to_ranges([Code]),
+    ?assertEqual([{prefix, Code}], Ranges).
+
+% Test: All 4 children collapse to parent
+collapse_four_children_test() ->
+    Parent = <<"0-01">>,
+    Children = [<<"0-010">>, <<"0-011">>, <<"0-012">>, <<"0-013">>],
+    {ranges, Ranges} = ambit:codes_to_ranges(Children),
+    ?assertEqual([{prefix, Parent}], Ranges).
+
+% Test: Three children do NOT collapse
+partial_children_test() ->
+    Codes = [<<"0-010">>, <<"0-011">>, <<"0-012">>],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    SortedCodes = lists:sort(Codes),
+    Expected = [{prefix, Code} || Code <- SortedCodes],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Unsorted input gets sorted correctly
+unsorted_input_test() ->
+    Codes = [<<"0-012">>, <<"0-010">>, <<"0-013">>, <<"0-011">>],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    ?assertEqual([{prefix, <<"0-01">>}], Ranges).
+
+% Test: Multi-level collapse (grandchildren → children → parent)
+multilevel_collapse_test() ->
+    %% 16 children at level 3 that collapse to 4 at level 2, then to 1 at level 1
+    Level3Codes = [
+        <<"0-0100">>, <<"0-0101">>, <<"0-0102">>, <<"0-0103">>,
+        <<"0-0110">>, <<"0-0111">>, <<"0-0112">>, <<"0-0113">>,
+        <<"0-0120">>, <<"0-0121">>, <<"0-0122">>, <<"0-0123">>,
+        <<"0-0130">>, <<"0-0131">>, <<"0-0132">>, <<"0-0133">>
+    ],
+    {ranges, Ranges} = ambit:codes_to_ranges(Level3Codes),
+    ?assertEqual([{prefix, <<"0-01">>}], Ranges).
+
+% Test: Partial multi-level (only 3 of 4 level-2 children)
+partial_multilevel_test() ->
+    %% 12 codes = 3 complete sets of 4 at level 3, plus 1 more
+    Codes = [
+        %% First complete set (level 3): 0-0100-0103
+        <<"0-0100">>, <<"0-0101">>, <<"0-0102">>, <<"0-0103">>,
+        %% Second complete set (level 3): 0-0110-0113
+        <<"0-0110">>, <<"0-0111">>, <<"0-0112">>, <<"0-0113">>,
+        %% Third complete set (level 3): 0-0120-0123
+        <<"0-0120">>, <<"0-0121">>, <<"0-0122">>, <<"0-0123">>,
+        %% Partial set (only 1 from 0-013x)
+        <<"0-0130">>
+    ],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    %% Should collapse to: 0-010, 0-011, 0-012, and one 0-0130
+    Expected = [
+        {prefix, <<"0-010">>},
+        {prefix, <<"0-011">>},
+        {prefix, <<"0-012">>},
+        {prefix, <<"0-0130">>}
+    ],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Mixed different faces
+mixed_faces_test() ->
+    Codes = [
+        <<"0-01">>, <<"0-02">>, <<"0-03">>,
+        <<"1-010">>, <<"1-011">>, <<"1-012">>, <<"1-013">>
+    ],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    Expected = [
+        {prefix, <<"0-01">>},
+        {prefix, <<"0-02">>},
+        {prefix, <<"0-03">>},
+        {prefix, <<"1-01">>}
+    ],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Already collapsed code stays as-is
+already_collapsed_test() ->
+    Code = <<"0-">>,
+    {ranges, Ranges} = ambit:codes_to_ranges([Code]),
+    ?assertEqual([{prefix, Code}], Ranges).
+
+% Test: Large dataset with multiple collapse opportunities
+large_dataset_test() ->
+    %% Create 8 complete sets at level 2, spread across 2 faces
+    Face0Codes = [
+        <<"0-000">>, <<"0-001">>, <<"0-002">>, <<"0-003">>,
+        <<"0-010">>, <<"0-011">>, <<"0-012">>, <<"0-013">>,
+        <<"0-020">>, <<"0-021">>, <<"0-022">>, <<"0-023">>,
+        <<"0-030">>, <<"0-031">>, <<"0-032">>, <<"0-033">>
+    ],
+    Face1Codes = [
+        <<"1-000">>, <<"1-001">>, <<"1-002">>, <<"1-003">>,
+        <<"1-010">>, <<"1-011">>, <<"1-012">>, <<"1-013">>,
+        <<"1-020">>, <<"1-021">>, <<"1-022">>, <<"1-023">>,
+        <<"1-030">>, <<"1-031">>, <<"1-032">>, <<"1-033">>
+    ],
+    AllCodes = Face0Codes ++ Face1Codes,
+    {ranges, Ranges} = ambit:codes_to_ranges(AllCodes),
+    %% Should collapse to just two: 0-0 and 1-0
+    Expected = [{prefix, <<"0-0">>}, {prefix, <<"1-0">>}],
+    ?assertEqual(Expected, Ranges).
+
+% Test: codes_to_sql generates correct SQL
+sql_generation_test() ->
+    Codes = [<<"0-010">>, <<"0-011">>, <<"0-012">>, <<"0-013">>, <<"1-01">>],
+    SqlQuery = ambit:codes_to_sql(Codes),
+    %% Should have collapsed to 0-01 and 1-01
+    ?assertMatch(_ when is_list(SqlQuery), SqlQuery),
+    ?assert(string:find(SqlQuery, "code LIKE") =/= nomatch),
+    ?assert(string:find(SqlQuery, "0-01") =/= nomatch),
+    ?assert(string:find(SqlQuery, "1-01") =/= nomatch).
+
+% Test: codes_to_sql with single code
+sql_single_code_test() ->
+    Codes = [<<"0-01">>],
+    SqlQuery = ambit:codes_to_sql(Codes),
+    Expected = "code LIKE '0-01%'",
+    ?assertEqual(Expected, SqlQuery).
+
+% Test: codes_to_sql with empty list
+sql_empty_list_test() ->
+    Codes = [],
+    SqlQuery = ambit:codes_to_sql(Codes),
+    ?assertEqual("false", SqlQuery).
+
+% Test: Interleaved codes from different parents
+interleaved_codes_test() ->
+    Codes = [
+        <<"0-000">>, <<"0-001">>, <<"0-002">>, <<"0-003">>,
+        <<"0-100">>, <<"0-101">>, <<"0-102">>, <<"0-103">>,
+        <<"0-200">>, <<"0-201">>, <<"0-202">>, <<"0-203">>,
+        <<"0-300">>, <<"0-301">>, <<"0-302">>, <<"0-303">>
+    ],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    Expected = [
+        {prefix, <<"0-00">>},
+        {prefix, <<"0-10">>},
+        {prefix, <<"0-20">>},
+        {prefix, <<"0-30">>}
+    ],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Three complete + one partial at same level
+three_plus_one_test() ->
+    Codes = [
+        <<"0-000">>, <<"0-001">>, <<"0-002">>, <<"0-003">>,
+        <<"0-010">>, <<"0-011">>, <<"0-012">>, <<"0-013">>,
+        <<"0-020">>, <<"0-021">>, <<"0-022">>, <<"0-023">>,
+        <<"0-030">>, <<"0-031">>  %% Only 2 of 4 children
+    ],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    Expected = [
+        {prefix, <<"0-00">>},
+        {prefix, <<"0-01">>},
+        {prefix, <<"0-02">>},
+        {prefix, <<"0-030">>},
+        {prefix, <<"0-031">>}
+    ],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Root level codes (no children)
+root_codes_test() ->
+    Codes = [<<"0-">>, <<"1-">>, <<"2-">>],
+    {ranges, Ranges} = ambit:codes_to_ranges(Codes),
+    Expected = [{prefix, <<"0-">>}, {prefix, <<"1-">>}, {prefix, <<"2-">>}],
+    ?assertEqual(Expected, Ranges).
+
+% Test: Very deep nesting all present
+deep_nesting_test() ->
+    %% Create a chain: one code at each level that has all 4 children
+    Base = <<"0-">>,
+    Level1 = <<"0-0">>,
+    Level2 = <<"0-00">>,
+    Level3 = <<"0-000">>,
+    Level4 = <<"0-0000">>,
+    Level5 = <<"0-00000">>,
+    
+    %% All 4 children at each level
+    Level1Codes = [<<"0-0">>, <<"0-1">>, <<"0-2">>, <<"0-3">>],
+    Level2Codes = [<<"0-00">>, <<"0-01">>, <<"0-02">>, <<"0-03">>],
+    Level3Codes = [<<"0-000">>, <<"0-001">>, <<"0-002">>, <<"0-003">>],
+    Level4Codes = [<<"0-0000">>, <<"0-0001">>, <<"0-0002">>, <<"0-0003">>],
+    Level5Codes = [<<"0-00000">>, <<"0-00001">>, <<"0-00002">>, <<"0-00003">>],
+    
+    AllCodes = Level1Codes ++ Level2Codes ++ Level3Codes ++ Level4Codes ++ Level5Codes,
+    {ranges, Ranges} = ambit:codes_to_ranges(AllCodes),
+
+    %% Should collapse all the way to root
+    ?assertEqual([{prefix, <<"0-">>}], Ranges).

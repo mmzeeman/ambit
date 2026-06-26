@@ -15,7 +15,9 @@
     neighbors/1,
     neighbors_2/1,
     from_xyz/1,
-    shape/2, shape/3
+    shape/2, shape/3,
+    codes_to_ranges/1,
+    codes_to_sql/1
 ]).
 
 -type disk_mode() :: corner | centroid.
@@ -232,9 +234,9 @@ great_circle_distance(P1, P2) ->
     math:acos(Dot) * ?EARTH_RADIUS_M.
 
 parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
-    case byte_size(Digits) > 1 of
+    case byte_size(Digits) > 0 of
         true  -> <<FaceDigits/binary, $-, (binary:part(Digits, 0, byte_size(Digits)-1))/binary>>;
-        false -> <<FaceDigits/binary, $-, Digits/binary>>
+        false -> <<FaceDigits/binary, $- >>
     end.
 
 cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
@@ -581,3 +583,60 @@ find_neighbor(MyIdx, Va, Vb, Faces) ->
                             lists:member(Va, tuple_to_list(F)),
                             lists:member(Vb, tuple_to_list(F))],
     NeighborIdx.
+
+%% @doc Transform a flat list of codes into optimized ranges.
+%% Collapses child codes into parent codes when all children are present,
+%% reducing the number of prefixes needed for efficient database queries.
+-spec codes_to_ranges([binary()]) -> {ranges, [{complete | prefix, binary()}]}.
+codes_to_ranges(Codes) ->
+    Collapsed = collapse_codes(lists:sort(Codes)),
+    Classified = [{prefix, Code} || Code <- Collapsed],
+    {ranges, Classified}.
+
+%% @doc Collapse codes by merging children into parents.
+%% If all 4 children of a parent are present, replace them with the parent.
+%% This process repeats recursively up the tree.
+collapse_codes(Codes) ->
+    case collapse_pass(Codes, [], false) of
+        {NewCodes, true} ->
+            %% Changes made, try again
+            collapse_codes(NewCodes);
+        {FinalCodes, false} ->
+            %% No changes, we're done
+            lists:sort(FinalCodes)
+    end.
+
+%% One pass of collapsing: try to merge consecutive children into parents
+collapse_pass([], Acc, Changed) ->
+    {lists:reverse(Acc), Changed};
+collapse_pass([Code | Rest], Acc, Changed) ->
+    Parent = parent(Code),
+    %% Generate all 4 possible children of this parent
+    Children = [<<Parent/binary, (D + $0)>> || D <- [0, 1, 2, 3]],
+    Remaining = [Code | Rest],
+    
+    %% Check if all 4 children are present
+    case lists:all(fun(C) -> lists:member(C, Remaining) end, Children) of
+        true ->
+            %% All children found! Collapse to parent and remove children from processing
+            NewRemaining = Remaining -- Children,
+            collapse_pass(NewRemaining, [Parent | Acc], true);
+        false ->
+            %% Not all children, keep this code
+            collapse_pass(Rest, [Code | Acc], Changed)
+    end.
+
+%% @doc Generate SQL-style range queries from collapsed codes
+%% Useful for converting Ambit codes to database queries
+-spec codes_to_sql(list()) -> string().
+codes_to_sql(Codes) ->
+    {ranges, Ranges} = codes_to_ranges(Codes),
+    Prefixes = [Code || {prefix, Code} <- Ranges],
+    case Prefixes of
+        [] ->
+            "false";  %% Empty result
+        _ ->
+            %% Generate LIKE patterns for each prefix
+            LikePatterns = [io_lib:format("code LIKE '~s%'", [Code]) || Code <- Prefixes],
+            string:join(LikePatterns, " OR ")
+    end.

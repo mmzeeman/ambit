@@ -45,6 +45,29 @@ main(["nominatim", QueryStr, ResStr, ModeStr]) ->
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
+main(["opendatasoft", PostcodeStr, ResStr]) ->
+    try
+        Res = list_to_integer(ResStr),
+        io:format("Fetching postcode data from Opendatasoft for: ~s~n", [PostcodeStr]),
+        GeoJSON = fetch_opendatasoft(PostcodeStr),
+        io:format("Generating shape visualization at res ~p (corner mode)...~n", [Res]),
+        generate_shape_viz(GeoJSON, Res, corner)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
+main(["opendatasoft", PostcodeStr, ResStr, ModeStr]) ->
+    try
+        Res = list_to_integer(ResStr),
+        Mode = parse_mode(ModeStr),
+        io:format("Fetching postcode data from Opendatasoft for: ~s~n", [PostcodeStr]),
+        GeoJSON = fetch_opendatasoft(PostcodeStr),
+        io:format("Generating shape visualization at res ~p (~s mode)...~n", [Res, ModeStr]),
+        generate_shape_viz(GeoJSON, Res, Mode)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
 main([LatStr, LonStr, ResStr]) ->
     try
         Lat = parse_float(LatStr),
@@ -102,6 +125,8 @@ main(_) ->
     io:format("~n"),
     io:format("  ./ambit_viz.escript nominatim 'Hoofddorp,Netherlands' 12~n"),
     io:format("  ./ambit_viz.escript nominatim 'Hoofddorp,Netherlands' 12 centroid~n"),
+    io:format("  ./ambit_viz.escript opendatasoft 2611 12~n"),
+    io:format("  ./ambit_viz.escript opendatasoft 2611 12 centroid~n"),
     io:format("~n"),
     io:format("The erlang_geojson argument is an Erlang map term (as printed in the shell),~n"),
     io:format("representing a GeoJSON Polygon or MultiPolygon geometry. Coordinates are~n"),
@@ -298,6 +323,47 @@ fetch_nominatim(Query) ->
             erlang:error({nominatim_http_error, Status, Reason});
         {error, Reason} ->
             erlang:error({nominatim_request_failed, Reason})
+    end.
+
+fetch_opendatasoft(Postcode) ->
+    case application:ensure_all_started(inets) of
+        {ok, _} -> ok;
+        {error, InetsReason} -> erlang:error({opendatasoft_request_failed, {inets_start_failed, InetsReason}})
+    end,
+    case application:ensure_all_started(ssl) of
+        {ok, _} -> ok;
+        {error, SslReason} -> erlang:error({opendatasoft_request_failed, {ssl_start_failed, SslReason}})
+    end,
+    Url = "https://public.opendatasoft.com/api/records/1.0/search/?dataset=georef-netherlands-postcode-pc4&q=pc4_code:" ++ Postcode ++ "&rows=1&format=json",
+    io:format("Fetching: ~s~n", [Url]),
+    case httpc:request(
+        get,
+        {Url, [{"User-Agent", "ambit_viz/1.0"}]},
+        [{ssl, [{verify, verify_none}]}],
+        []) of
+        {ok, {{_, 200, _}, _Headers, Body}} ->
+            Response = json:decode(iolist_to_binary(Body)),
+            NHits = maps:get(<<"nhits">>, Response),
+            Records = maps:get(<<"records">>, Response),
+            case {NHits, Records} of
+                {0, _} ->
+                    erlang:error({opendatasoft_no_results, Postcode});
+                {_, []} ->
+                    erlang:error({opendatasoft_no_results, Postcode});
+                {_, [First | _]} ->
+                    Fields = maps:get(<<"fields">>, First),
+                    case maps:find(<<"geo_shape">>, Fields) of
+                        {ok, GeoShape} -> 
+                            io:format("Found postcode ~s~n", [maps:get(<<"pc4_code">>, Fields, <<"unknown">>)]),
+                            GeoShape;
+                        error -> 
+                            erlang:error({opendatasoft_no_geojson, First})
+                    end
+            end;
+        {ok, {{_, Status, Reason}, _Headers, _Body}} ->
+            erlang:error({opendatasoft_http_error, Status, Reason});
+        {error, Reason} ->
+            erlang:error({opendatasoft_request_failed, Reason})
     end.
 
 geojson_to_leaflet_js(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}) ->
