@@ -153,3 +153,47 @@ great_circle_m({Lat1, Lon1}, {Lat2, Lon2}) ->
     X2 = math:cos(La2)*math:cos(Lo2), Y2 = math:cos(La2)*math:sin(Lo2), Z2 = math:sin(La2),
     Dot = max(-1.0, min(1.0, X1*X2 + Y1*Y2 + Z1*Z2)),
     math:acos(Dot) * 6371000.0.
+
+%% A simple bounding-box polygon around Amsterdam
+shape_polygon_test() ->
+    %% Rough bounding box: 52.3N-52.5N, 4.8E-5.1E
+    GeoJSON = #{<<"type">> => <<"Polygon">>,
+                <<"coordinates">> => [[
+                    [4.8, 52.3], [5.1, 52.3], [5.1, 52.5], [4.8, 52.5], [4.8, 52.3]
+                ]]},
+    Codes = ambit:shape(GeoJSON, 12),
+    ?assert(length(Codes) > 0),
+    lists:foreach(fun(C) -> ?assert(is_binary(C)) end, Codes).
+
+%% corner mode returns at least as many codes as centroid mode
+shape_mode_test() ->
+    GeoJSON = #{<<"type">> => <<"Polygon">>,
+                <<"coordinates">> => [[
+                    [4.8, 52.3], [5.1, 52.3], [5.1, 52.5], [4.8, 52.5], [4.8, 52.3]
+                ]]},
+    Res = 11,
+    Corner   = ambit:shape(GeoJSON, Res, corner),
+    Centroid = ambit:shape(GeoJSON, Res, centroid),
+    ?assert(length(Corner) >= length(Centroid)).
+
+%% MultiPolygon returns union of per-polygon results
+shape_multipolygon_test() ->
+    P1 = [[4.8, 52.3], [5.1, 52.3], [5.1, 52.5], [4.8, 52.5], [4.8, 52.3]],
+    P2 = [[13.3, 52.4], [13.6, 52.4], [13.6, 52.6], [13.3, 52.6], [13.3, 52.4]],
+    GeoJSON = #{<<"type">> => <<"MultiPolygon">>,
+                <<"coordinates">> => [[P1], [P2]]},
+    Codes = ambit:shape(GeoJSON, 10),
+    ?assert(length(Codes) > 0).
+
+%% Every returned code's centroid should be decodable
+shape_all_decodable_test() ->
+    GeoJSON = #{<<"type">> => <<"Polygon">>,
+                <<"coordinates">> => [[
+                    [4.85, 52.35], [4.95, 52.35], [4.95, 52.45], [4.85, 52.45], [4.85, 52.35]
+                ]]},
+    Codes = ambit:shape(GeoJSON, 13),
+    lists:foreach(fun(C) ->
+        {Lat, Lon} = ambit:decode(C),
+        ?assert(is_float(Lat)),
+        ?assert(is_float(Lon))
+    end, Codes).
