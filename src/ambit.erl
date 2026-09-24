@@ -15,11 +15,14 @@
     neighbors/1,
     neighbors_2/1,
     from_xyz/1,
-    shape/2, shape/3
+    shape/2, shape/3,
+    bounds/2, bounds/3
 ]).
 
 -type disk_mode() :: corner | centroid.
--export_type([disk_mode/0]).
+-type bounds() :: {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}
+                | [number()].
+-export_type([disk_mode/0, bounds/0]).
 
 -on_load(init_persistent_terms/0).
 
@@ -160,6 +163,36 @@ shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode
         fun(Rings) ->
             shape(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => Rings}, Res, Mode)
         end, Polys)).
+
+%% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
+%% Uses corner mode by default.
+-spec bounds(Bounds :: bounds(), Level :: pos_integer()) -> [binary()].
+bounds(Bounds, Level) ->
+    bounds(Bounds, Level, corner).
+
+%% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
+%% Mode can be:
+%%   `corner'   – include triangle when at least one corner or centroid falls
+%%                into the bounding box, or when the bounding box is contained.
+%%   `centroid' – include triangle only when its centroid falls into the bounding box
+%%                (or when the bounding box is contained).
+-spec bounds(Bounds :: bounds(), Level :: pos_integer(), Mode :: disk_mode()) -> [binary()].
+bounds([MinLat, MinLon, MaxLat, MaxLon], Level, Mode) ->
+    bounds({MinLat, MinLon, MaxLat, MaxLon}, Level, Mode);
+bounds({Lat1, Lon1, Lat2, Lon2}, Level, Mode)
+  when is_number(Lat1), is_number(Lon1), is_number(Lat2), is_number(Lon2),
+       is_integer(Level), Level >= 1, Level =< 24,
+       (Mode =:= corner orelse Mode =:= centroid) ->
+    NormalizedBounds = normalize_bounds({Lat1, Lon1, Lat2, Lon2}),
+    CandidateFaces = find_candidate_faces(NormalizedBounds),
+    lists:usort(lists:flatmap(
+        fun(FaceIdx) ->
+            search_face_bounds(FaceIdx, Level, Mode, NormalizedBounds)
+        end,
+        CandidateFaces
+    ));
+bounds(_, _, _) ->
+    erlang:error(badarg).
 
 disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
@@ -501,6 +534,237 @@ shape_bfs_loop(Rings, Mode, Queue0, Visited, Acc) ->
             ),
             shape_bfs_loop(Rings, Mode, Queue2, Visited1, Acc1)
     end.
+
+%% --- Bounds helpers (gnomonic projection) ---
+
+normalize_bounds({Lat1, Lon1, Lat2, Lon2}) ->
+    MinLat = min(float(Lat1), float(Lat2)),
+    MaxLat = max(float(Lat1), float(Lat2)),
+    NLon1 = normalise_lon_180(float(Lon1)),
+    NLon2 = normalise_lon_180(float(Lon2)),
+    {MinLat, NLon1, MaxLat, NLon2}.
+
+find_candidate_faces({MinLat, MinLon, MaxLat, MaxLon} = Bounds) ->
+    Lats = sample_interval(MinLat, MaxLat, 6),
+    Lons = sample_lon_interval(MinLon, MaxLon, 6),
+    Perimeter = [{MinLat, Lon} || Lon <- Lons] ++
+                [{MaxLat, Lon} || Lon <- Lons] ++
+                [{Lat, MinLon} || Lat <- Lats] ++
+                [{Lat, MaxLon} || Lat <- Lats] ++
+                [{(MinLat + MaxLat) / 2.0, mid_lon(MinLon, MaxLon)}],
+    SeedFaces = [nearest_face(to_xyz(P)) || P <- Perimeter],
+    InsideCenters = [F || F <- lists:seq(0, 19),
+                          is_in_bounds(from_xyz(lists:nth(F+1, face_centres_list())), Bounds)],
+    InsideVerts = [F || F <- lists:seq(0, 19),
+                        face_has_vertex_in_bounds(F, Bounds)],
+    AllFound = lists:usort(SeedFaces ++ InsideCenters ++ InsideVerts),
+    AdjFaces = [Adj || F <- AllFound, Adj <- tuple_to_list(element(F+1, face_adjacencies()))],
+    lists:usort(AllFound ++ AdjFaces).
+
+face_has_vertex_in_bounds(FaceIdx, Bounds) ->
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    is_in_bounds(from_xyz(unproject(V1, FaceIdx)), Bounds) orelse
+    is_in_bounds(from_xyz(unproject(V2, FaceIdx)), Bounds) orelse
+    is_in_bounds(from_xyz(unproject(V3, FaceIdx)), Bounds).
+
+sample_interval(Min, Max, N) ->
+    Step = (Max - Min) / float(N),
+    [Min + I * Step || I <- lists:seq(0, N)].
+
+sample_lon_interval(MinLon, MaxLon, N) when MinLon =< MaxLon ->
+    sample_interval(MinLon, MaxLon, N);
+sample_lon_interval(MinLon, MaxLon, N) when MinLon > MaxLon ->
+    Span = (MaxLon + 360.0) - MinLon,
+    Step = Span / float(N),
+    [normalise_lon_180(MinLon + I * Step) || I <- lists:seq(0, N)].
+
+normalise_lon_180(Lon) ->
+    case Lon > 180.0 of
+        true -> Lon - 360.0;
+        false ->
+            case Lon < -180.0 of
+                true -> Lon + 360.0;
+                false -> Lon
+            end
+    end.
+
+mid_lon(MinLon, MaxLon) when MinLon =< MaxLon ->
+    (MinLon + MaxLon) / 2.0;
+mid_lon(MinLon, MaxLon) when MinLon > MaxLon ->
+    normalise_lon_180((MinLon + MaxLon + 360.0) / 2.0).
+
+search_face_bounds(FaceIdx, Level, Mode, Bounds) ->
+    case face_bounding_box_2d(FaceIdx, Bounds) of
+        {ok, Box2D} ->
+            {V1, V2, V3} = face_verts_2d(FaceIdx),
+            search_triangle(FaceIdx, 0, Level, Mode, Bounds, Box2D, {V1, V2, V3}, <<>>, []);
+        none ->
+            []
+    end.
+
+face_bounding_box_2d(FaceIdx, {MinLat, MinLon, MaxLat, MaxLon} = Bounds) ->
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    FVMinX = min(element(1, V1), min(element(1, V2), element(1, V3))),
+    FVMaxX = max(element(1, V1), max(element(1, V2), element(1, V3))),
+    FVMinY = min(element(2, V1), min(element(2, V2), element(2, V3))),
+    FVMaxY = max(element(2, V1), max(element(2, V2), element(2, V3))),
+
+    Lats = sample_interval(MinLat, MaxLat, 6),
+    Lons = sample_lon_interval(MinLon, MaxLon, 6),
+    SamplePts = [{MinLat, Lon} || Lon <- Lons] ++
+                [{MaxLat, Lon} || Lon <- Lons] ++
+                [{Lat, MinLon} || Lat <- Lats] ++
+                [{Lat, MaxLon} || Lat <- Lats] ++
+                [{(MinLat + MaxLat) / 2.0, mid_lon(MinLon, MaxLon)}],
+
+    {{Cx, Cy, Cz}, _, _} = face_basis(FaceIdx),
+    ProjPts = lists:filtermap(
+        fun(P) ->
+            {X, Y, Z} = to_xyz(P),
+            D = X*Cx + Y*Cy + Z*Cz,
+            case D > 0.05 of
+                true -> {true, project({X, Y, Z}, FaceIdx)};
+                false -> false
+            end
+        end,
+        SamplePts
+    ),
+
+    FaceVertsInside = [V || V <- [V1, V2, V3], is_in_bounds(from_xyz(unproject(V, FaceIdx)), Bounds)],
+    FCInside = case is_in_bounds(from_xyz(lists:nth(FaceIdx+1, face_centres_list())), Bounds) of
+                   true -> [{0.0, 0.0}];
+                   false -> []
+               end,
+
+    AllPts = ProjPts ++ FaceVertsInside ++ FCInside,
+    case AllPts of
+        [] ->
+            none;
+        _ ->
+            PMinX = lists:min([X || {X, _} <- AllPts]),
+            PMaxX = lists:max([X || {X, _} <- AllPts]),
+            PMinY = lists:min([Y || {_, Y} <- AllPts]),
+            PMaxY = lists:max([Y || {_, Y} <- AllPts]),
+
+            MarginX = max(0.05, (PMaxX - PMinX) * 0.1),
+            MarginY = max(0.05, (PMaxY - PMinY) * 0.1),
+
+            BMinX = max(FVMinX, PMinX - MarginX),
+            BMaxX = min(FVMaxX, PMaxX + MarginX),
+            BMinY = max(FVMinY, PMinY - MarginY),
+            BMaxY = min(FVMaxY, PMaxY + MarginY),
+            case (BMinX > FVMaxX) orelse (BMaxX < FVMinX) orelse
+                 (BMinY > FVMaxY) orelse (BMaxY < FVMinY) of
+                true -> none;
+                false -> {ok, {BMinX, BMinY, BMaxX, BMaxY}}
+            end
+    end.
+
+search_triangle(FaceIdx, TargetLevel, TargetLevel, Mode, Bounds, _Box2D, {TV1, TV2, TV3}, DigitsAcc, Acc) ->
+    case triangle_in_bounds(FaceIdx, {TV1, TV2, TV3}, Mode, Bounds) of
+        true ->
+            FaceBin = element(FaceIdx + 1, face_bins()),
+            [<<FaceBin/binary, $-, DigitsAcc/binary>> | Acc];
+        false ->
+            Acc
+    end;
+search_triangle(FaceIdx, CurLevel, TargetLevel, Mode, Bounds, Box2D, {TV1, TV2, TV3}, DigitsAcc, Acc) ->
+    case triangle_overlaps_box2d({TV1, TV2, TV3}, Box2D) of
+        false ->
+            Acc;
+        true ->
+            M12 = mid_2d(TV1, TV2),
+            M23 = mid_2d(TV2, TV3),
+            M31 = mid_2d(TV3, TV1),
+            NextLevel = CurLevel + 1,
+
+            Acc0 = search_triangle(FaceIdx, NextLevel, TargetLevel, Mode, Bounds, Box2D,
+                                   {M12, M23, M31}, <<DigitsAcc/binary, $0>>, Acc),
+            Acc1 = search_triangle(FaceIdx, NextLevel, TargetLevel, Mode, Bounds, Box2D,
+                                   {TV1, M12, M31}, <<DigitsAcc/binary, $1>>, Acc0),
+            Acc2 = search_triangle(FaceIdx, NextLevel, TargetLevel, Mode, Bounds, Box2D,
+                                   {TV2, M12, M23}, <<DigitsAcc/binary, $2>>, Acc1),
+            search_triangle(FaceIdx, NextLevel, TargetLevel, Mode, Bounds, Box2D,
+                            {TV3, M23, M31}, <<DigitsAcc/binary, $3>>, Acc2)
+    end.
+
+triangle_overlaps_box2d({{X1, Y1}, {X2, Y2}, {X3, Y3}}, {MinX, MinY, MaxX, MaxY}) ->
+    TMinX = min(X1, min(X2, X3)),
+    TMaxX = max(X1, max(X2, X3)),
+    TMinY = min(Y1, min(Y2, Y3)),
+    TMaxY = max(Y1, max(Y2, Y3)),
+    not (TMaxX < MinX orelse TMinX > MaxX orelse TMaxY < MinY orelse TMinY > MaxY).
+
+triangle_in_bounds(FaceIdx, {TV1, TV2, TV3}, Mode, Bounds) ->
+    {TV1x, TV1y} = TV1,
+    {TV2x, TV2y} = TV2,
+    {TV3x, TV3y} = TV3,
+    CX = (TV1x + TV2x + TV3x) / 3.0,
+    CY = (TV1y + TV2y + TV3y) / 3.0,
+    CentroidLatLon = from_xyz(unproject({CX, CY}, FaceIdx)),
+    case is_in_bounds(CentroidLatLon, Bounds) of
+        true ->
+            true;
+        false ->
+            case Mode of
+                centroid ->
+                    bounds_enclosed_in_triangle(Bounds, {TV1, TV2, TV3}, FaceIdx);
+                corner ->
+                    C1 = from_xyz(unproject(TV1, FaceIdx)),
+                    C2 = from_xyz(unproject(TV2, FaceIdx)),
+                    C3 = from_xyz(unproject(TV3, FaceIdx)),
+                    is_in_bounds(C1, Bounds) orelse
+                    is_in_bounds(C2, Bounds) orelse
+                    is_in_bounds(C3, Bounds) orelse
+                    bounds_intersects_triangle(Bounds, {TV1, TV2, TV3}, FaceIdx)
+            end
+    end.
+
+is_in_bounds({Lat, Lon}, {MinLat, MinLon, MaxLat, MaxLon}) ->
+    Lat >= MinLat andalso Lat =< MaxLat andalso in_lon(Lon, MinLon, MaxLon).
+
+in_lon(Lon, MinLon, MaxLon) when MinLon =< MaxLon ->
+    Lon >= MinLon andalso Lon =< MaxLon;
+in_lon(Lon, MinLon, MaxLon) when MinLon > MaxLon ->
+    Lon >= MinLon orelse Lon =< MaxLon.
+
+bounds_enclosed_in_triangle({MinLat, MinLon, MaxLat, MaxLon}, {TV1, TV2, TV3}, FaceIdx) ->
+    Corners = [{MinLat, MinLon}, {MinLat, MaxLon}, {MaxLat, MaxLon}, {MaxLat, MinLon}],
+    {{Cx, Cy, Cz}, _, _} = face_basis(FaceIdx),
+    lists:all(fun(Coord) ->
+        {X, Y, Z} = to_xyz(Coord),
+        D = X*Cx + Y*Cy + Z*Cz,
+        case D > 0.0 of
+            true ->
+                P2D = project({X, Y, Z}, FaceIdx),
+                {U, V, W} = barycentric_2d(P2D, TV1, TV2, TV3),
+                U >= -1.0e-9 andalso V >= -1.0e-9 andalso W >= -1.0e-9;
+            false ->
+                false
+        end
+    end, Corners).
+
+bounds_intersects_triangle({MinLat, MinLon, MaxLat, MaxLon}, {TV1, TV2, TV3}, FaceIdx) ->
+    MidLat = (MinLat + MaxLat) / 2.0,
+    MidLon = mid_lon(MinLon, MaxLon),
+    Points = [
+        {MidLat, MidLon},
+        {MinLat, MinLon}, {MinLat, MaxLon}, {MaxLat, MaxLon}, {MaxLat, MinLon},
+        {MinLat, MidLon}, {MaxLat, MidLon}, {MidLat, MinLon}, {MidLat, MaxLon}
+    ],
+    {{Cx, Cy, Cz}, _, _} = face_basis(FaceIdx),
+    lists:any(fun(Coord) ->
+        {X, Y, Z} = to_xyz(Coord),
+        D = X*Cx + Y*Cy + Z*Cz,
+        case D > 0.0 of
+            true ->
+                P2D = project({X, Y, Z}, FaceIdx),
+                {U, V, W} = barycentric_2d(P2D, TV1, TV2, TV3),
+                U >= -1.0e-9 andalso V >= -1.0e-9 andalso W >= -1.0e-9;
+            false ->
+                false
+        end
+    end, Points).
 
 %% --- Persistent Data ---
 

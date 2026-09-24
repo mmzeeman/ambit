@@ -22,6 +22,23 @@ main(["shape", TermStr, ResStr, ModeStr]) ->
         E:R:S ->
             io:format("Error: ~p:~p~n~p~n", [E, R, S])
     end;
+main(["bounds", MinLatStr, MinLonStr, MaxLatStr, MaxLonStr, ResStr]) ->
+    main(["bounds", MinLatStr, MinLonStr, MaxLatStr, MaxLonStr, ResStr, "corner"]);
+main(["bounds", MinLatStr, MinLonStr, MaxLatStr, MaxLonStr, ResStr, ModeStr]) ->
+    try
+        MinLat = parse_float(MinLatStr),
+        MinLon = parse_float(MinLonStr),
+        MaxLat = parse_float(MaxLatStr),
+        MaxLon = parse_float(MaxLonStr),
+        Res = list_to_integer(ResStr),
+        Mode = parse_mode(ModeStr),
+        Bounds = {MinLat, MinLon, MaxLat, MaxLon},
+        io:format("Generating bounds visualization for ~p at res ~p (~s mode)...~n", [Bounds, Res, ModeStr]),
+        generate_bounds_viz(Bounds, Res, Mode)
+    catch
+        E:R:S ->
+            io:format("Error: ~p:~p~n~p~n", [E, R, S])
+    end;
 main(["nominatim", QueryStr, ResStr]) ->
     try
         Res = list_to_integer(ResStr),
@@ -86,6 +103,7 @@ main([LatStr, LonStr, ResStr, DiamStr, ModeStr]) ->
 main(_) ->
     io:format("Usage:~n"),
     io:format("  ./ambit_viz.escript <lat> <lon> <res> [diameter_m] [mode]~n"),
+    io:format("  ./ambit_viz.escript bounds <min_lat> <min_lon> <max_lat> <max_lon> <res> [mode]~n"),
     io:format("  ./ambit_viz.escript shape <erlang_geojson> <res> [mode]~n"),
     io:format("  ./ambit_viz.escript nominatim <query> <res> [mode]~n"),
     io:format("~n"),
@@ -96,6 +114,9 @@ main(_) ->
     io:format("  ./ambit_viz.escript 52.3676 4.9041 10~n"),
     io:format("  ./ambit_viz.escript 52.3676 4.9041 13 1000~n"),
     io:format("  ./ambit_viz.escript 52.3676 4.9041 13 1000 centroid~n"),
+    io:format("~n"),
+    io:format("  ./ambit_viz.escript bounds 52.3 4.8 52.5 5.1 12~n"),
+    io:format("  ./ambit_viz.escript bounds 52.3 4.8 52.5 5.1 12 centroid~n"),
     io:format("~n"),
     io:format("  ./ambit_viz.escript shape '#{<<\"type\">> => <<\"Polygon\">>, <<\"coordinates\">> => [[[4.8,52.3],[5.1,52.3],[5.1,52.5],[4.8,52.5],[4.8,52.3]]]}' 12~n"),
     io:format("  ./ambit_viz.escript shape '#{<<\"type\">> => <<\"Polygon\">>, <<\"coordinates\">> => [[[4.8,52.3],[5.1,52.3],[5.1,52.5],[4.8,52.5],[4.8,52.3]]]}' 12 centroid~n"),
@@ -373,6 +394,72 @@ data.forEach(d => {
 });
 ~s
 </script></body></html>", [InfoHtml, CenterLat, CenterLon, string:join(ShapeData, ","), PolygonJs]),
+
+    file:write_file("ambit_viz.html", Html),
+    io:format("Generated ambit_viz.html~n").
+
+generate_bounds_viz({MinLat, MinLon, MaxLat, MaxLon} = Bounds, Res, Mode) ->
+    Codes = ambit:bounds(Bounds, Res, Mode),
+    io:format("Bounds contains ~p codes at level ~p~n", [length(Codes), Res]),
+    ModeStr = atom_to_list(Mode),
+
+    CenterLat = (MinLat + MaxLat) / 2.0,
+    CenterLon = (MinLon + MaxLon) / 2.0,
+    ShapeData = [to_json(C, "#e040e0", 1, 0.35) || C <- Codes],
+
+    RectangleJs = io_lib:format(
+        "L.rectangle([[~f, ~f], [~f, ~f]], {color: 'red', weight: 2, fillOpacity: 0.05, dashArray: '6,4', "
+        "interactive: false}).addTo(map);~n", [MinLat, MinLon, MaxLat, MaxLon]),
+
+    InfoHtml = io_lib:format(
+        "<div style='position:absolute;top:10px;right:10px;z-index:1000;"
+        "background:white;padding:12px;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,0.3);"
+        "font-family:monospace;font-size:13px;'>"
+        "<b>Bounds Coverage</b><br>"
+        "Level: ~p<br>"
+        "Codes: ~p<br>"
+        "Mode: ~s"
+        "</div>",
+        [Res, length(Codes), ModeStr]),
+
+    Html = io_lib:format("
+<!DOCTYPE html>
+<html><head>
+<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" />
+<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
+<style>
+#map { height: 100vh; margin: 0; }
+.label { font-size: 10px; font-weight: bold; text-shadow: 0 0 2px white; pointer-events: none; }
+</style>
+</head>
+<body>
+~s
+<div id=\"map\"></div>
+<script>
+var map = L.map(\"map\").setView([~f, ~f], 12);
+L.tileLayer(\"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png\").addTo(map);
+
+var data = [~s];
+data.forEach(d => {
+    L.polygon(d.coords, {color: d.color, weight: d.weight, fillOpacity: d.opacity, interactive: true}).addTo(map)
+     .bindPopup(\"Code: \" + d.code);
+
+    var center = [0, 0];
+    d.coords.forEach(c => { center[0] += c[0]; center[1] += c[1]; });
+    center[0] /= d.coords.length;
+    center[1] /= d.coords.length;
+
+    L.marker(center, {
+        icon: L.divIcon({
+            className: 'label',
+            html: '<span style=\"color:' + d.color + '\">' + d.code.split('-')[1].slice(-3) + '</span>',
+            iconSize: [40, 12],
+            iconAnchor: [20, 6]
+        })
+    }).addTo(map);
+});
+~s
+</script></body></html>", [InfoHtml, CenterLat, CenterLon, string:join(ShapeData, ","), RectangleJs]),
 
     file:write_file("ambit_viz.html", Html),
     io:format("Generated ambit_viz.html~n").
