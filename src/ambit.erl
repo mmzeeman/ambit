@@ -439,27 +439,6 @@ neighbors_2(Code) ->
     All = lists:usort(lists:flatten([neighbors(C) || C <- N1])),
     All -- [Code | N1].
 
-%compute_neighbors(Code, NumDirs) ->
-%    {FaceIdx, Digits} = parse_code(Code),
-%    Res = byte_size(Digits),
-%    {V1, V2, V3} = face_verts_2d(FaceIdx),
-%    {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
-%
-%    Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
-%    Center2D = centroid_2d(RV1, RV2, RV3),
-%    Candidates = ring_points_2d(Center2D, Shift, NumDirs),
-%
-%    %% Fetch these tables ONCE per cell instead of once per candidate
-%    %% direction — all 12 candidates share the same hint face.
-%    FaceCentres = face_centres(),
-%    HintCentre = element(FaceIdx+1, FaceCentres),
-%
-%    lists:usort([begin
-%                     XYZ = unproject(P, FaceIdx),
-%                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre, FaceCentres),
-%                     encode_at_face(XYZ, Res, NFaceIdx)
-%                 end || P <- Candidates]) -- [Code].
-
 compute_neighbors(Code, NumDirs) ->
     {FaceIdx, Digits} = parse_code(Code),
     Res = byte_size(Digits),
@@ -686,7 +665,6 @@ cell_corners_and_centroid(Code) ->
     C3 = from_xyz(unproject(RV3, FaceIdx)),
     Centroid = from_xyz(unproject(centroid_2d(RV1, RV2, RV3), FaceIdx)),
     {C1, C2, C3, Centroid}.
-
 
 %% --- Persistent Data ---
 
