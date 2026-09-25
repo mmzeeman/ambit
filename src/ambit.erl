@@ -49,8 +49,13 @@ encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
     FaceBin = element(FaceIdx+1, face_bins()),
     <<FaceBin/binary, $-, Digits/binary>>.
 
-decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
+    {binary_to_integer(FaceBin, ?NR_FACES), DigitsBin};
+parse_code(_) ->
+    erlang:error(badarg).
+
+decode(Code) ->
+    {FaceIdx, DigitsBin} = parse_code(Code),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
     
@@ -60,31 +65,27 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     
     %% Unproject using the same hexveil logic
     XYZ = unproject({CX, CY}, FaceIdx),
-    from_xyz(XYZ);
-decode(_) ->
-    erlang:error(badarg).
+    from_xyz(XYZ).
 
-digits(<<_:1/binary, $-, DigitsBin/binary>>) ->
-    DigitsBin;
-digits(_) ->
-    erlang:error(badarg).
+digits(Code) ->
+    {_, DigitsBin} = parse_code(Code),
+    DigitsBin.
 
 resolution(Code) ->
     byte_size(digits(Code)).
 
 %% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
 %% The orthocenter is the intersection of the triangle's three altitudes.
-orthocenter(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+orthocenter(Code) ->
+    {FaceIdx, DigitsBin} = parse_code(Code),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
     {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
     XYZ = unproject({OX, OY}, FaceIdx),
-    from_xyz(XYZ);
-orthocenter(_) ->
-    erlang:error(badarg).
+    from_xyz(XYZ).
 
-disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
+disk(Code, DiameterMeters)
+  when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
     case resolution(Code) of
         Res when Res > 0 ->
             {Lat, Lon} = decode(Code),
@@ -92,7 +93,8 @@ disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), Diam
         _ ->
             erlang:error(badarg)
     end;
-disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
+disk({Lat, Lon}, DiameterMeters)
+  when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
 
 disk({Lat, Lon}, Res, DiameterMeters)
@@ -155,7 +157,9 @@ shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 %% Mode can be `corner' (any corner or centroid inside polygon) or
 %% `centroid' (centroid only).
 -spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
-shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
+shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< 24)
+       andalso (Mode =:= centroid orelse Mode =:= corner) ->
     case Rings of
         [Outer | _] ->
             LatLonRings = [geojson_ring_to_latlon(R) || R <- Rings],
@@ -164,11 +168,15 @@ shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
         _ ->
             erlang:error(badarg)
     end;
-shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode) ->
+shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< 24)
+       andalso (Mode =:= centroid orelse Mode =:= corner) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
             shape(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => Rings}, Res, Mode)
-        end, Polys)).
+        end, Polys));
+shape(_, _, _) ->
+    erlang:error(badarg).
 
 %% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
 %% Uses corner mode by default.
@@ -177,44 +185,32 @@ bounds(Bounds, Level) ->
     bounds(Bounds, Level, corner).
 
 bounds(Bounds, Res, Mode) ->
-    shape(bounds_to_geojson(Bounds), Res, Mode).
+    shape(bounds_to_geojson(normalise_bounds(Bounds)), Res, Mode).
 
 bounds_to_geojson({MinLat, MinLon, MaxLat, MaxLon}) ->
     #{
         <<"type">> => <<"Polygon">>,
         <<"coordinates">> => [[
-            [MinLon, MinLat],
-            [MaxLon, MinLat],
-            [MaxLon, MaxLat],
-            [MinLon, MaxLat],
-            [MinLon, MinLat]
-        ]]
+                               [MinLon, MinLat],
+                               [MaxLon, MinLat],
+                               [MaxLon, MaxLat],
+                               [MinLon, MaxLat],
+                               [MinLon, MinLat]
+                              ]]
     }.
 
+normalise_bounds({Lat1, Lon1, Lat2, Lon2})
+  when is_number(Lat1) andalso is_number(Lon1)
+       andalso is_number(Lat2) andalso is_number(Lon2) ->
+    MinLat = min(float(Lat1), float(Lat2)),
+    MaxLat = max(float(Lat1), float(Lat2)),
 
-%% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
-%% Mode can be:
-%%   `corner'   – include triangle when at least one corner or centroid falls
-%%                into the bounding box, or when the bounding box is contained.
-%%   `centroid' – include triangle only when its centroid falls into the bounding box
-%%                (or when the bounding box is contained).
-%-spec bounds(Bounds :: bounds(), Level :: pos_integer(), Mode :: disk_mode()) -> [binary()].
-%bounds([MinLat, MinLon, MaxLat, MaxLon], Level, Mode) ->
-%    bounds({MinLat, MinLon, MaxLat, MaxLon}, Level, Mode);
-%bounds({Lat1, Lon1, Lat2, Lon2}, Level, Mode)
-%  when is_number(Lat1), is_number(Lon1), is_number(Lat2), is_number(Lon2),
-%       is_integer(Level), Level >= 1, Level =< 24,
-%       (Mode =:= corner orelse Mode =:= centroid) ->
-%    NormalizedBounds = normalize_bounds({Lat1, Lon1, Lat2, Lon2}),
-%    CandidateFaces = find_candidate_faces(NormalizedBounds),
-%    lists:usort(lists:flatmap(
-%        fun(FaceIdx) ->
-%            search_face_bounds(FaceIdx, Level, Mode, NormalizedBounds)
-%        end,
-%        CandidateFaces
-%    ));
-%bounds(_, _, _) ->
-%    erlang:error(badarg).
+    NLon1 = normalise_lon(float(Lon1), 0.0),
+    NLon2 = normalise_lon(float(Lon2), 0.0),
+
+    {MinLat, NLon1, MaxLat, NLon2};
+normalise_bounds(_) ->
+    erlang:error(badarg).
 
 disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
@@ -280,9 +276,9 @@ great_circle_distance(P1, P2) ->
     {X2, Y2, Z2} = to_xyz(P2),
     Dot0 = X1*X2 + Y1*Y2 + Z1*Z2,
     Dot = if
-        Dot0 > 1.0 -> 1.0;
+        Dot0 > 1.0  -> 1.0;
         Dot0 < -1.0 -> -1.0;
-        true -> Dot0
+        true        -> Dot0
     end,
     math:acos(Dot) * ?EARTH_RADIUS_M.
 
@@ -292,8 +288,8 @@ parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
         false -> <<FaceDigits/binary, $-, Digits/binary>>
     end.
 
-cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+cell_geometry(Code) ->
+    {FaceIdx, DigitsBin} = parse_code(Code),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
     
@@ -312,18 +308,19 @@ sub_encode(P, {V1, V2, V3}, Res, Acc) ->
     {U, V, W} = barycentric_2d(P, V1, V2, V3),
     
     Digit = if
-        U >= 0.5 -> $1;
-        V >= 0.5 -> $2;
-        W >= 0.5 -> $3;
-        true     -> $0
-    end,
+                U >= 0.5 -> $1;
+                V >= 0.5 -> $2;
+                W >= 0.5 -> $3;
+                true     -> $0
+            end,
     
     NewVerts = case Digit of
-        $1 -> {V1, M12, M31};
-        $2 -> {V2, M12, M23};
-        $3 -> {V3, M23, M31};
-        $0 -> {M12, M23, M31}
-    end,
+                   $1 -> {V1, M12, M31};
+                   $2 -> {V2, M12, M23};
+                   $3 -> {V3, M23, M31};
+                   $0 -> {M12, M23, M31}
+               end,
+
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
 sub_decode(<<Digit, Rest/binary>>, V1, V2, V3) ->
@@ -331,11 +328,11 @@ sub_decode(<<Digit, Rest/binary>>, V1, V2, V3) ->
     M23 = mid_2d(V2, V3),
     M31 = mid_2d(V3, V1),
     {NV1, NV2, NV3} = case Digit of
-        $1 -> {V1, M12, M31};
-        $2 -> {V2, M12, M23};
-        $3 -> {V3, M23, M31};
-        $0 -> {M12, M23, M31}
-    end,
+                          $1 -> {V1, M12, M31};
+                          $2 -> {V2, M12, M23};
+                          $3 -> {V3, M23, M31};
+                          $0 -> {M12, M23, M31}
+                      end,
     sub_decode(Rest, NV1, NV2, NV3);
 sub_decode(<<>>, V1, V2, V3) ->
     {V1, V2, V3}.
@@ -366,18 +363,18 @@ compute_neighbors(Code, NumDirs) ->
     {CX, CY} = project(XYZ, FaceIdx),
     
     lists:usort([begin
-        SX = CX + Shift * math:cos(A),
-        SY = CY + Shift * math:sin(A),
-        NewXYZ = unproject({SX, SY}, FaceIdx),
+                     SX = CX + Shift * math:cos(A),
+                     SY = CY + Shift * math:sin(A),
+                     NewXYZ = unproject({SX, SY}, FaceIdx),
         
-        %% Optimized encoding using Hint
-        NewFaceIdx = nearest_face(NewXYZ, FaceIdx),
-        {NX, NY} = project(NewXYZ, NewFaceIdx),
-        {V1n, V2n, V3n} = face_verts_2d(NewFaceIdx),
-        NDigits = sub_encode({NX, NY}, {V1n, V2n, V3n}, Res, <<>>),
-        FaceBin = element(NewFaceIdx+1, face_bins()),
-        <<FaceBin/binary, $-, NDigits/binary>>
-    end || A <- Angles]) -- [Code].
+                     %% Optimized encoding using Hint
+                     NewFaceIdx = nearest_face(NewXYZ, FaceIdx),
+                     {NX, NY} = project(NewXYZ, NewFaceIdx),
+                     {V1n, V2n, V3n} = face_verts_2d(NewFaceIdx),
+                     NDigits = sub_encode({NX, NY}, {V1n, V2n, V3n}, Res, <<>>),
+                     FaceBin = element(NewFaceIdx+1, face_bins()),
+                     <<FaceBin/binary, $-, NDigits/binary>>
+                 end || A <- Angles]) -- [Code].
 
 dist_2d({X1,Y1}, {X2,Y2}) ->
     DX = X1-X2, DY = Y1-Y2,
@@ -462,8 +459,9 @@ nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
     MaxIdx;
 nearest_face({X,Y,Z}=XYZ, [{Cx,Cy,Cz}|Rest], Idx, MaxD, MaxIdx) ->
     D = X*Cx + Y*Cy + Z*Cz,
-    if D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
-       true -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
+    if
+        D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
+        true     -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
     end.
 
 %% --- Shape / GeoJSON helpers ---
@@ -474,8 +472,11 @@ polygon_seeds(OuterRing, Res) ->
         [] -> [];
         _ ->
             {SumLat, SumLon, N} = lists:foldl(
-                fun({Lat, Lon}, {SLat, SLon, Cnt}) -> {SLat+Lat, SLon+Lon, Cnt+1} end,
-                {0.0, 0.0, 0}, LatLons),
+                                    fun({Lat, Lon}, {SLat, SLon, Cnt}) ->
+                                            {SLat+Lat, SLon+Lon, Cnt+1}
+                                    end,
+                                    {0.0, 0.0, 0},
+                                    LatLons),
             Centroid = {SumLat/N, SumLon/N},
             VertexCells = lists:usort([encode(P, Res) || P <- LatLons]),
             lists:usort([encode(Centroid, Res) | VertexCells])
@@ -484,13 +485,19 @@ polygon_seeds(OuterRing, Res) ->
 geojson_ring_to_latlon(Ring) ->
     [{lat_of(V), lon_of(V)} || V <- Ring].
 
-lat_of([_Lon, Lat | _]) -> Lat.
-lon_of([Lon | _]) -> Lon.
+lat_of([_Lon, Lat | _]) ->
+    Lat.
+
+lon_of([Lon | _]) ->
+    Lon.
 
 within_shape(Rings, Code, corner) ->
     Corners = cell_geometry(Code),
     Centroid = decode(Code),
-    lists:any(fun(P) -> point_in_polygon(P, Rings) end, [Centroid | Corners]);
+    lists:any(fun(P) ->
+                      point_in_polygon(P, Rings)
+              end,
+              [Centroid | Corners]);
 within_shape(Rings, Code, centroid) ->
     point_in_polygon(decode(Code), Rings).
 
@@ -524,9 +531,10 @@ ray_cast({Lat, Lon}, Ring) ->
 
 normalise_lon(VertLon, TestLon) ->
     DLon = VertLon - TestLon,
-    if DLon > 180.0  -> VertLon - 360.0;
-       DLon < -180.0 -> VertLon + 360.0;
-       true           -> VertLon
+    if
+        DLon > 180.0  -> VertLon - 360.0;
+        DLon < -180.0 -> VertLon + 360.0;
+        true          -> VertLon
     end.
 
 shape_bfs(Rings, Mode, Seeds) ->
