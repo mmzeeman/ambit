@@ -208,20 +208,78 @@ shape(_, _, _) ->
 bounds(Bounds, Level) ->
     bounds(Bounds, Level, corner).
 
-bounds(Bounds, Res, Mode) ->
-    shape(bounds_to_geojson(normalise_bounds(Bounds)), Res, Mode).
+bounds(Bounds, Res, Mode)
+  when Res >= 1 andalso Res =< ?MAX_RES
+       andalso (Mode =:= corner orelse Mode =:= centroid) ->
+    NormBounds = normalise_bounds(Bounds),
+    Seeds = bounds_seeds(NormBounds, Res),
+    flood_fill(Seeds,
+               fun(Code) ->
+                       within_bounds(NormBounds, Code, Mode)
+               end);
+bounds(_, _, _) ->
+    erlang:error(badarg).
 
-bounds_to_geojson({MinLat, MinLon, MaxLat, MaxLon}) ->
-    #{
-        <<"type">> => <<"Polygon">>,
-        <<"coordinates">> => [[
-                               [MinLon, MinLat],
-                               [MaxLon, MinLat],
-                               [MaxLon, MaxLat],
-                               [MinLon, MaxLat],
-                               [MinLon, MinLat]
-                              ]]
-    }.
+bounds_seeds({MinLat, MinLon, MaxLat, MaxLon}, Res) ->
+    CenterLat = (MinLat + MaxLat) / 2.0,
+    CenterLon = bounds_center_lon(MinLon, MaxLon),
+    Corners = [{MinLat, MinLon}, {MinLat, MaxLon},
+               {MaxLat, MinLon}, {MaxLat, MaxLon}],
+    lists:usort([encode({CenterLat, CenterLon}, Res) |
+                 [encode(P, Res) || P <- Corners]]).
+
+bounds_center_lon(MinLon, MaxLon) when MinLon =< MaxLon ->
+    (MinLon + MaxLon) / 2.0;
+bounds_center_lon(MinLon, MaxLon) ->
+    %% Range wraps the antimeridian.
+    normalise_lon((MinLon + MaxLon + 360.0) / 2.0, 0.0).
+
+within_bounds(Bounds, Code, corner) ->
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
+    in_bounds(C1, Bounds) orelse in_bounds(C2, Bounds)
+    orelse in_bounds(C3, Bounds) orelse in_bounds(Centroid, Bounds);
+within_bounds(Bounds, Code, centroid) ->
+    in_bounds(decode(Code), Bounds).
+
+in_bounds({Lat, Lon}, {MinLat, MinLon, MaxLat, MaxLon}) ->
+    Lat >= MinLat andalso Lat =< MaxLat andalso lon_in_range(Lon, MinLon, MaxLon).
+
+lon_in_range(Lon, MinLon, MaxLon) when MinLon =< MaxLon ->
+    Lon >= MinLon andalso Lon =< MaxLon;
+lon_in_range(Lon, MinLon, MaxLon) -> %% wraps the antimeridian
+    Lon >= MinLon orelse Lon =< MaxLon.
+
+
+flood_fill(Seeds, WithinFun) ->
+    Visited0 = sets:from_list(Seeds, [{version, 2}]),
+    Queue0 = queue:from_list(Seeds),
+    InitAcc = [S || S <- Seeds, WithinFun(S)],
+    flood_fill_loop(WithinFun, Queue0, Visited0, InitAcc).
+
+flood_fill_loop(WithinFun, Queue0, Visited, Acc) ->
+    case queue:out(Queue0) of
+        {empty, _} -> Acc;
+        {{value, Code}, Queue1} ->
+            {Queue2, Visited1, Acc1} = lists:foldl(
+                fun(NCode, {Q, V, A}) ->
+                    case sets:is_element(NCode, V) of
+                        true -> {Q, V, A};
+                        false ->
+                            V1 = sets:add_element(NCode, V),
+                            case WithinFun(NCode) of
+                                true  -> {queue:in(NCode, Q), V1, [NCode | A]};
+                                false -> {Q, V1, A}
+                            end
+                    end
+                end,
+                {Queue1, Visited, Acc},
+                neighbors(Code)
+            ),
+            flood_fill_loop(WithinFun, Queue2, Visited1, Acc1)
+    end.
+
+shape_bfs(Rings, Mode, Seeds) ->
+    flood_fill(Seeds, fun(Code) -> within_shape(Rings, Code, Mode) end).
 
 normalise_bounds({Lat1, Lon1, Lat2, Lon2})
   when is_number(Lat1) andalso is_number(Lon1)
@@ -345,38 +403,22 @@ cell_geometry(Code) ->
 
 sub_encode(_P, _Verts, 0, Acc) -> Acc;
 sub_encode(P, {V1, V2, V3}, Res, Acc) ->
-    M12 = mid_2d(V1, V2),
-    M23 = mid_2d(V2, V3),
-    M31 = mid_2d(V3, V1),
-    
     {U, V, W} = barycentric_2d(P, V1, V2, V3),
-    
-    Digit = if
-                U >= 0.5 -> $1;
-                V >= 0.5 -> $2;
-                W >= 0.5 -> $3;
-                true     -> $0
-            end,
-    
-    NewVerts = case Digit of
-                   $1 -> {V1, M12, M31};
-                   $2 -> {V2, M12, M23};
-                   $3 -> {V3, M23, M31};
-                   $0 -> {M12, M23, M31}
-               end,
-
+    {Digit, NewVerts} = if
+        U >= 0.5 -> {$1, {V1, mid_2d(V1, V2), mid_2d(V3, V1)}};
+        V >= 0.5 -> {$2, {V2, mid_2d(V1, V2), mid_2d(V2, V3)}};
+        W >= 0.5 -> {$3, {V3, mid_2d(V2, V3), mid_2d(V3, V1)}};
+        true     -> {$0, {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}}
+    end,
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
 sub_decode(<<Digit, Rest/binary>>, V1, V2, V3) ->
-    M12 = mid_2d(V1, V2),
-    M23 = mid_2d(V2, V3),
-    M31 = mid_2d(V3, V1),
     {NV1, NV2, NV3} = case Digit of
-                          $1 -> {V1, M12, M31};
-                          $2 -> {V2, M12, M23};
-                          $3 -> {V3, M23, M31};
-                          $0 -> {M12, M23, M31}
-                      end,
+        $1 -> {V1, mid_2d(V1, V2), mid_2d(V3, V1)};
+        $2 -> {V2, mid_2d(V1, V2), mid_2d(V2, V3)};
+        $3 -> {V3, mid_2d(V2, V3), mid_2d(V3, V1)};
+        $0 -> {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}
+    end,
     sub_decode(Rest, NV1, NV2, NV3);
 sub_decode(<<>>, V1, V2, V3) ->
     {V1, V2, V3}.
@@ -399,11 +441,33 @@ compute_neighbors(Code, NumDirs) ->
 
     Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
     Center2D = centroid_2d(RV1, RV2, RV3),
-
     Candidates = ring_points_2d(Center2D, Shift, NumDirs),
 
-    lists:usort([encode_from_xyz(unproject(P, FaceIdx), Res, FaceIdx)
-                 || P <- Candidates]) -- [Code].
+    %% Fetch these tables ONCE per cell instead of once per candidate
+    %% direction — all 12 candidates share the same hint face.
+    FaceCentres = face_centres(),
+    HintCentre = element(FaceIdx+1, FaceCentres),
+    NeighborIdxs = tuple_to_list(element(FaceIdx+1, face_adjacencies())),
+
+    lists:usort([begin
+                     XYZ = unproject(P, FaceIdx),
+                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre,
+                                                   NeighborIdxs, FaceCentres),
+                     encode_at_face(XYZ, Res, NFaceIdx)
+                 end || P <- Candidates]) -- [Code].
+
+nearest_face_fast({X,Y,Z}=XYZ, HintFace, {HCx,HCy,HCz}, NeighborIdxs, FaceCentres) ->
+    D0 = X*HCx + Y*HCy + Z*HCz,
+    search_faces_fast(XYZ, NeighborIdxs, FaceCentres, D0, HintFace).
+
+search_faces_fast(_XYZ, [], _FaceCentres, _MaxD, MaxIdx) ->
+    MaxIdx;
+search_faces_fast({X,Y,Z}=XYZ, [FaceIdx|Rest], FaceCentres, MaxD, MaxIdx) ->
+    {Cx,Cy,Cz} = element(FaceIdx+1, FaceCentres),
+    D = X*Cx + Y*Cy + Z*Cz,
+    if D > MaxD -> search_faces_fast(XYZ, Rest, FaceCentres, D, FaceIdx);
+       true     -> search_faces_fast(XYZ, Rest, FaceCentres, MaxD, MaxIdx)
+    end.
 
 centroid_2d({X1,Y1}, {X2,Y2}, {X3,Y3}) ->
     {(X1+X2+X3)/3.0, (Y1+Y2+Y3)/3.0}.
@@ -478,23 +542,7 @@ cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
     {Ay*Bz - Az*By, Az*Bx - Ax*Bz, Ax*By - Ay*Bx}.
 
 nearest_face(XYZ) ->
-    nearest_face(XYZ, face_centres_list(), 0, -2.0, 0).
-
-nearest_face({X,Y,Z}=XYZ, HintFace) ->
-    Neighbors = element(HintFace+1, face_adjacencies()),
-    CheckFaces = tuple_to_list(Neighbors),
-    {Cx,Cy,Cz} = lists:nth(HintFace+1, face_centres_list()),
-    D = X*Cx + Y*Cy + Z*Cz,
-    search_faces(XYZ, CheckFaces, D, HintFace).
-
-search_faces(_XYZ, [], _MaxD, MaxIdx) ->
-    MaxIdx;
-search_faces({X,Y,Z}=XYZ, [FaceIdx|Rest], MaxD, MaxIdx) ->
-    {Cx,Cy,Cz} = lists:nth(FaceIdx+1, face_centres_list()),
-    D = X*Cx + Y*Cy + Z*Cz,
-    if D > MaxD -> search_faces(XYZ, Rest, D, FaceIdx);
-       true -> search_faces(XYZ, Rest, MaxD, MaxIdx)
-    end.
+    nearest_face(XYZ, tuple_to_list(face_centres()), 0, -2.0, 0).
 
 nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
     MaxIdx;
@@ -568,41 +616,22 @@ normalise_lon(VertLon, TestLon) ->
         true          -> VertLon
     end.
 
-shape_bfs(Rings, Mode, Seeds) ->
-    Visited0 = sets:from_list(Seeds, [{version, 2}]),
-    Queue0 = queue:from_list(Seeds),
-    InitAcc = [S || S <- Seeds, within_shape(Rings, S, Mode)],
-    shape_bfs_loop(Rings, Mode, Queue0, Visited0, InitAcc).
-
-shape_bfs_loop(Rings, Mode, Queue0, Visited, Acc) ->
-    case queue:out(Queue0) of
-        {empty, _} -> Acc;
-        {{value, Code}, Queue1} ->
-            {Queue2, Visited1, Acc1} = lists:foldl(
-                fun(NCode, {Q, V, A}) ->
-                    case sets:is_element(NCode, V) of
-                        true -> {Q, V, A};
-                        false ->
-                            V1 = sets:add_element(NCode, V),
-                            case within_shape(Rings, NCode, Mode) of
-                                true  -> {queue:in(NCode, Q), V1, [NCode | A]};
-                                false -> {Q, V1, A}
-                            end
-                    end
-                end,
-                {Queue1, Visited, Acc},
-                neighbors(Code)
-            ),
-            shape_bfs_loop(Rings, Mode, Queue2, Visited1, Acc1)
-    end.
-
 %% --- Persistent Data ---
 
-face_basis(Face) -> element(Face+1, persistent_term:get({?MODULE, face_bases})).
-face_bins() -> persistent_term:get({?MODULE, face_bins}).
-face_verts_2d(Idx) -> element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
-face_centres_list() -> persistent_term:get({?MODULE, face_centres}).
-face_adjacencies() -> persistent_term:get({?MODULE, face_adjacencies}).
+face_basis(Face) ->
+    element(Face+1, persistent_term:get({?MODULE, face_bases})).
+
+face_bins() ->
+    persistent_term:get({?MODULE, face_bins}).
+
+face_verts_2d(Idx) ->
+    element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
+
+face_centres() ->
+    persistent_term:get({?MODULE, face_centres}).
+
+face_adjacencies() ->
+    persistent_term:get({?MODULE, face_adjacencies}).
 
 init_persistent_terms() ->
     UpLat = math:atan(0.5) / ?D2R,
@@ -625,7 +654,7 @@ init_persistent_terms() ->
                    {Cx,Cy,Cz} = element(C+1, VT),
                    unit({(Ax+Bx+Cx)/3.0, (Ay+By+Cy)/3.0, (Az+Bz+Cz)/3.0})
                end || {A,B,C} <- Faces],
-    persistent_term:put({?MODULE, face_centres}, Centres),
+    persistent_term:put({?MODULE, face_centres}, list_to_tuple(Centres)),
 
     %% Calculate Face Adjacencies
     Adj = [begin
@@ -689,9 +718,6 @@ digits(Code) ->
 
 encode_from_xyz(XYZ, Res) ->
     encode_at_face(XYZ, Res, nearest_face(XYZ)).
-
-encode_from_xyz(XYZ, Res, FaceHint) ->
-    encode_at_face(XYZ, Res, nearest_face(XYZ, FaceHint)).
 
 encode_at_face(XYZ, Res, FaceIdx) ->
     {X, Y} = project(XYZ, FaceIdx),
