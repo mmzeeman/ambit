@@ -28,6 +28,8 @@
 
 -define(D2R, 0.017453292519943295).
 -define(DEFAULT_RES, 14).
+-define(MAX_RES, 24).
+
 -define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
 -define(PRIVACY_CENTER_RES, 14).
@@ -35,7 +37,7 @@
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
 
-encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
+encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
     XYZ = to_xyz({Lat, Lon}),
     FaceIdx = nearest_face(XYZ),
     
@@ -139,7 +141,7 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
     %% Level = round(log2(BaseDiameter / DiameterMeters)) + 1
     BaseDiameter = 4003017.0,
     Level = round(math:log2(BaseDiameter / DiameterMeters)) + 1,
-    max(1, min(24, Level)).
+    max(1, min(?MAX_RES, Level)).
 
 %% @doc Return the privacy-preserving center point for a location.
 %% This is the orthocenter of the enclosing triangle at the fixed
@@ -159,7 +161,7 @@ shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 %% `centroid' (centroid only).
 -spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
 shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
-  when (is_integer(Res) andalso Res >= 1 andalso Res =< 24)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
        andalso (Mode =:= centroid orelse Mode =:= corner) ->
     case Rings of
         [Outer | _] ->
@@ -170,7 +172,7 @@ shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
             erlang:error(badarg)
     end;
 shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode)
-  when (is_integer(Res) andalso Res >= 1 andalso Res =< 24)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
        andalso (Mode =:= centroid orelse Mode =:= corner) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
