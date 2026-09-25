@@ -22,16 +22,18 @@
     bounds/2, bounds/3
 ]).
 
--type lat()        :: float().
--type lon()        :: float().
--type latlon()     :: {lat(), lon()}.
--type triangle()   :: {latlon(), latlon(), latlon()}.
--type xyz()        :: {float(), float(), float()}.
--type resolution() :: 0..24.
--type face_idx()   :: 0..19.
--type meters()     :: number().
--type code()       :: <<_:16, _:_*8>>. % code is at least two bytes long.
--type disk_mode()  :: corner | centroid.
+-type lat()         :: float().
+-type lon()         :: float().
+-type latlon()      :: {lat(), lon()}.
+-type triangle_2d() :: {xy(), xy(), xy()}.
+-type triangle()    :: {latlon(), latlon(), latlon()}.
+-type xyz()         :: {float(), float(), float()}.
+-type xy()          :: {float(), float()}.
+-type resolution()  :: 0..24.
+-type face_idx()    :: 0..19.
+-type meters()      :: number().
+-type code()        :: <<_:16, _:_*8>>. % code is at least two bytes long.
+-type disk_mode()   :: corner | centroid.
 
 -type bounds() ::
     {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
@@ -76,16 +78,11 @@ cell_vertices(Code) ->
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {FaceIdx, sub_decode(Digits, V1, V2, V3)}.
 
+%% @doc Return the centroid of the triangle identified by Code.
 -spec decode(code()) -> latlon().
 decode(Code) ->
-    {FaceIdx, { RV1 ,  RV2, RV3}} = cell_vertices(Code),
-    
-    %% Centroid in 2D space
-    {CX, CY} = {(element(1,RV1)+element(1,RV2)+element(1,RV3))/3.0,
-                (element(2,RV1)+element(2,RV2)+element(2,RV3))/3.0},
-    
-    %% Unproject using the same hexveil logic
-    XYZ = unproject({CX, CY}, FaceIdx),
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    XYZ = unproject(centroid_2d(RV1, RV2, RV3), FaceIdx),
     from_xyz(XYZ).
 
 -spec resolution(code()) -> resolution().
@@ -404,7 +401,7 @@ sub_encode(P, {V1, V2, V3}, Res, Acc) ->
                         end,
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
-
+-spec sub_decode(code(), xy(), xy(), xy()) -> triangle_2d().
 sub_decode(<<$1, Rest/binary>>, V1, V2, V3) ->
     sub_decode(Rest, V1, mid_2d(V1, V2), mid_2d(V3, V1));
 sub_decode(<<$2, Rest/binary>>, V1, V2, V3) ->
@@ -462,6 +459,7 @@ search_faces_fast({X,Y,Z}=XYZ, [FaceIdx|Rest], FaceCentres, MaxD, MaxIdx) ->
        true     -> search_faces_fast(XYZ, Rest, FaceCentres, MaxD, MaxIdx)
     end.
 
+-spec centroid_2d(xy(), xy(), xy()) -> xy().
 centroid_2d({X1,Y1}, {X2,Y2}, {X3,Y3}) ->
     {(X1+X2+X3)/3.0, (Y1+Y2+Y3)/3.0}.
 
@@ -494,8 +492,9 @@ barycentric_2d({Px,Py}, {V1x,V1y}, {V2x,V2y}, {V3x,V3y}) ->
     V = ((V3y-V1y)*(Px-V3x) + (V1x-V3x)*(Py-V3y)) / Det,
     {U, V, 1.0-U-V}.
 
-mid_2d({X1,Y1}, {X2,Y2}) ->
-    {(X1+X2)/2.0, (Y1+Y2)/2.0}.
+-spec mid_2d(xy(), xy()) -> xy().
+mid_2d({X1, Y1}, {X2, Y2}) ->
+    {(X1 + X2) / 2.0, (Y1 + Y2) / 2.0}.
 
 %% @doc Compute the orthocenter of a triangle in 2D.
 %% The orthocenter is the intersection of the altitudes.
