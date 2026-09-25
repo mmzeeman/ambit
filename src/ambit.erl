@@ -34,6 +34,9 @@
 -define(NR_FACES, 20).
 -define(PRIVACY_CENTER_RES, 14).
 
+-define(NEIGHBOR_DIRS, 12).
+-define(NEIGHBOR_SHIFT_FACTOR, 0.9).
+
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
 
@@ -340,7 +343,7 @@ sub_decode(<<>>, V1, V2, V3) ->
 %% --- Neighbors logic ---
 
 neighbors(Code) ->
-    compute_neighbors(Code, 12). %% 12 directions (edge + vertex)
+    compute_neighbors(Code, ?NEIGHBOR_DIRS). %% 12 directions (edge + vertex)
 
 neighbors_2(Code) ->
     N1 = neighbors(Code),
@@ -357,7 +360,7 @@ compute_neighbors(Code, NumDirs) ->
     
     {RV1, RV2, _RV3} = sub_decode(Digits, V1, V2, V3),
     Side = dist_2d(RV1, RV2),
-    Shift = Side * 0.9, %% Move far enough to hit the next triangle
+    Shift = Side * ?NEIGHBOR_SHIFT_FACTOR, %% Move far enough to hit the next triangle
     
     Angles = [I * (2 * math:pi() / NumDirs) || I <- lists:seq(0, NumDirs-1)],
     {CX, CY} = project(XYZ, FaceIdx),
