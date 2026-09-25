@@ -19,12 +19,13 @@
     bounds/2, bounds/3
 ]).
 
+-on_load(init_persistent_terms/0).
+
 -type disk_mode() :: corner | centroid.
 -type bounds() :: {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}
                 | [number()].
--export_type([disk_mode/0, bounds/0]).
 
--on_load(init_persistent_terms/0).
+-export_type([disk_mode/0, bounds/0]).
 
 -define(D2R, 0.017453292519943295).
 -define(DEFAULT_RES, 14).
