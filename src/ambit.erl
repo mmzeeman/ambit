@@ -279,17 +279,21 @@ within(Center, Code, RadiusMeters, corner) ->
 within(Center, Code, RadiusMeters, centroid) ->
     centroid_within(Center, Code, RadiusMeters).
 
-%% @doc Check if the triangle overlaps the disk.
-%% A triangle overlaps when any corner OR the centroid is within the radius.
-%% Checking only corners misses cells whose centroid is inside the disk but
-%% whose corners are all outside (common when cells are large relative to the disk).
-any_corner_within(Center, Code, RadiusMeters) ->
-    {C1, C2, C3} = cell_geometry(Code),
+within_shape(Rings, Code, corner) ->
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
+    point_in_polygon(C1, Rings)
+    orelse point_in_polygon(C2, Rings)
+    orelse point_in_polygon(C3, Rings)
+    orelse point_in_polygon(Centroid, Rings);
+within_shape(Rings, Code, centroid) ->
+    point_in_polygon(decode(Code), Rings).
 
+any_corner_within(Center, Code, RadiusMeters) ->
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
     great_circle_distance(Center, C1) =< RadiusMeters
     orelse great_circle_distance(Center, C2) =< RadiusMeters
     orelse great_circle_distance(Center, C3) =< RadiusMeters
-    orelse centroid_within(Center, Code, RadiusMeters).
+    orelse great_circle_distance(Center, Centroid) =< RadiusMeters.
 
 %% @doc Check if the triangle's centroid is within the disk.
 centroid_within(Center, Code, RadiusMeters) ->
@@ -528,15 +532,6 @@ lat_of([_Lon, Lat | _]) ->
 lon_of([Lon | _]) ->
     Lon.
 
-within_shape(Rings, Code, corner) ->
-    {C1, C2, C3} = cell_geometry(Code),
-    point_in_polygon(C1, Rings)
-    orelse point_in_polygon(C2, Rings)
-    orelse point_in_polygon(C3, Rings)
-    orelse point_in_polygon(decode(Code), Rings);
-within_shape(Rings, Code, centroid) ->
-    point_in_polygon(decode(Code), Rings).
-
 point_in_polygon({Lat, Lon}, [Outer | Holes]) ->
     ray_cast({Lat, Lon}, Outer) andalso
     not lists:any(fun(Hole) -> ray_cast({Lat, Lon}, Hole) end, Holes).
@@ -704,4 +699,13 @@ encode_at_face(XYZ, Res, FaceIdx) ->
     Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
     FaceBin = element(FaceIdx+1, face_bins()),
     <<FaceBin/binary, $-, Digits/binary>>.
+
+%% Corners and centroid from a single parse_code + sub_decode walk.
+cell_corners_and_centroid(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    C1 = from_xyz(unproject(RV1, FaceIdx)),
+    C2 = from_xyz(unproject(RV2, FaceIdx)),
+    C3 = from_xyz(unproject(RV3, FaceIdx)),
+    Centroid = from_xyz(unproject(centroid_2d(RV1, RV2, RV3), FaceIdx)),
+    {C1, C2, C3, Centroid}.
 
