@@ -397,21 +397,22 @@ sub_encode(_P, _Verts, 0, Acc) -> Acc;
 sub_encode(P, {V1, V2, V3}, Res, Acc) ->
     {U, V, W} = barycentric_2d(P, V1, V2, V3),
     {Digit, NewVerts} = if
-        U >= 0.5 -> {$1, {V1, mid_2d(V1, V2), mid_2d(V3, V1)}};
-        V >= 0.5 -> {$2, {V2, mid_2d(V1, V2), mid_2d(V2, V3)}};
-        W >= 0.5 -> {$3, {V3, mid_2d(V2, V3), mid_2d(V3, V1)}};
-        true     -> {$0, {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}}
-    end,
+                            U >= 0.5 -> {$1, {V1, mid_2d(V1, V2), mid_2d(V3, V1)}};
+                            V >= 0.5 -> {$2, {V2, mid_2d(V1, V2), mid_2d(V2, V3)}};
+                            W >= 0.5 -> {$3, {V3, mid_2d(V2, V3), mid_2d(V3, V1)}};
+                            true     -> {$0, {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}}
+                        end,
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
-sub_decode(<<Digit, Rest/binary>>, V1, V2, V3) ->
-    {NV1, NV2, NV3} = case Digit of
-        $1 -> {V1, mid_2d(V1, V2), mid_2d(V3, V1)};
-        $2 -> {V2, mid_2d(V1, V2), mid_2d(V2, V3)};
-        $3 -> {V3, mid_2d(V2, V3), mid_2d(V3, V1)};
-        $0 -> {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}
-    end,
-    sub_decode(Rest, NV1, NV2, NV3);
+
+sub_decode(<<$1, Rest/binary>>, V1, V2, V3) ->
+    sub_decode(Rest, V1, mid_2d(V1, V2), mid_2d(V3, V1));
+sub_decode(<<$2, Rest/binary>>, V1, V2, V3) ->
+    sub_decode(Rest, V2, mid_2d(V1, V2), mid_2d(V2, V3));
+sub_decode(<<$3, Rest/binary>>, V1, V2, V3) ->
+    sub_decode(Rest, V3, mid_2d(V2, V3), mid_2d(V3, V1));
+sub_decode(<<$0, Rest/binary>>, V1, V2, V3) ->
+    sub_decode(Rest, mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1));
 sub_decode(<<>>, V1, V2, V3) ->
     {V1, V2, V3}.
 
