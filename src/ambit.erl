@@ -26,16 +26,11 @@
 -type lon()      :: float().
 -type latlon()   :: {lat(), lon()}.
 -type triangle() :: {latlon(), latlon(), latlon()}.
-
 -type xyz()      :: {float(), float(), float()}.
-
 -type resolution() :: 1..24.
 -type face_idx()   :: 0..19.
-
 -type meters() :: number().
-
 -type code() :: <<_:16, _:_*8>>. % code is at least two bytes long.
-
 -type disk_mode() :: corner | centroid.
 
 -type bounds() ::
