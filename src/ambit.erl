@@ -2,54 +2,83 @@
 %% Uses the exact same projection engine as Hexveil for alignment.
 
 -module(ambit).
+-on_load(init_persistent_terms/0).
 
 -export([
     encode/2, encode/1,
     decode/1,
+    resolution/1,
     orthocenter/1,
     disk/2, disk/3, disk/4,
     disk_center/1,
     optimal_level/1,
     parent/1,
+    coarsen/2,
     cell_geometry/1,
     neighbors/1,
     neighbors_2/1,
     from_xyz/1,
-    shape/2, shape/3
+    shape/2, shape/3,
+    bounds/2, bounds/3
 ]).
 
+-type lat()      :: float().
+-type lon()      :: float().
+-type latlon()   :: {lat(), lon()}.
+-type triangle() :: {latlon(), latlon(), latlon()}.
+-type xyz()      :: {float(), float(), float()}.
+-type resolution() :: 1..24.
+-type face_idx()   :: 0..19.
+-type meters() :: number().
+-type code() :: <<_:16, _:_*8>>. % code is at least two bytes long.
 -type disk_mode() :: corner | centroid.
--export_type([disk_mode/0]).
 
--on_load(init_persistent_terms/0).
+-type bounds() ::
+    {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
+
+-export_type([
+    code/0,
+    latlon/0,
+    triangle/0,
+    resolution/0,
+    meters/0,
+    disk_mode/0,
+    bounds/0
+]).
 
 -define(D2R, 0.017453292519943295).
 -define(DEFAULT_RES, 14).
+-define(MAX_RES, 24).
+
 -define(EARTH_RADIUS_M, 6371000.0).
 -define(NR_FACES, 20).
 -define(PRIVACY_CENTER_RES, 14).
 
+-define(NEIGHBOR_DIRS, 12).
+-define(NEIGHBOR_SHIFT_FACTOR, 0.9).
+
+-spec encode(latlon()) -> code().
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
 
-encode({Lat, Lon}, Res) when Res >= 1, Res =< 24 ->
-    XYZ = to_xyz({Lat, Lon}),
-    FaceIdx = nearest_face(XYZ),
-    
-    %% Use the same 2D projection as hexveil
-    {X, Y} = project(XYZ, FaceIdx),
-    
-    %% Get face vertices in the same 2D space
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    
-    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
-    FaceBin = element(FaceIdx+1, face_bins()),
-    <<FaceBin/binary, $-, Digits/binary>>.
+-spec encode(latlon(), resolution()) -> code().
+encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
+    encode_from_xyz(to_xyz({Lat, Lon}), Res).
 
-decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
+-spec parse_code(code()) -> {face_idx(), binary()}.
+parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
+    {binary_to_integer(FaceBin, ?NR_FACES), DigitsBin};
+parse_code(_) ->
+    erlang:error(badarg).
+
+cell_vertices(Code) ->
+    {FaceIdx, Digits} = parse_code(Code),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+    {FaceIdx, sub_decode(Digits, V1, V2, V3)}.
+
+-spec decode(code()) -> latlon().
+decode(Code) ->
+    {FaceIdx, { RV1 ,  RV2, RV3}} = cell_vertices(Code),
     
     %% Centroid in 2D space
     {CX, CY} = {(element(1,RV1)+element(1,RV2)+element(1,RV3))/3.0,
@@ -59,33 +88,34 @@ decode(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     XYZ = unproject({CX, CY}, FaceIdx),
     from_xyz(XYZ).
 
+-spec resolution(code()) -> resolution().
+resolution(Code) ->
+    byte_size(digits(Code)).
+
 %% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
 %% The orthocenter is the intersection of the triangle's three altitudes.
-orthocenter(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+-spec orthocenter(code()) -> latlon().
+orthocenter(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
     XYZ = unproject({OX, OY}, FaceIdx),
     from_xyz(XYZ).
 
-disk(Code, DiameterMeters) when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
-    case binary:split(Code, <<"-">>) of
-        [_, Digits] when byte_size(Digits) > 0 ->
-            try decode(Code) of
-                {Lat, Lon} ->
-                    Res = byte_size(Digits),
-                    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner)
-            catch
-                _:_ ->
-                    erlang:error(badarg)
-            end;
+-spec disk(code() | latlon(), meters()) -> [code()].
+disk(Code, DiameterMeters)
+  when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
+    case resolution(Code) of
+        Res when Res > 0 ->
+            {Lat, Lon} = decode(Code),
+            disk_from_center({Lat, Lon}, Res, DiameterMeters, corner);
         _ ->
             erlang:error(badarg)
     end;
-disk({Lat, Lon}, DiameterMeters) when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
+disk({Lat, Lon}, DiameterMeters)
+  when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
 
+-spec disk(latlon(), resolution(), meters()) -> [code()].
 disk({Lat, Lon}, Res, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk_from_center({Lat, Lon}, Res, DiameterMeters, corner).
@@ -99,8 +129,7 @@ disk({Lat, Lon}, Res, DiameterMeters)
 %%                slightly larger coverage).
 %%   `centroid' – include the triangle only when its centroid falls
 %%                within the radius (tighter fit).
--spec disk({Lat :: float(), Lon :: float()}, Res :: pos_integer(),
-           DiameterMeters :: number(), Mode :: disk_mode()) -> [binary()].
+-spec disk(latlon(), resolution(), meters(), disk_mode()) -> [code()].
 disk({Lat, Lon}, Res, DiameterMeters, Mode)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0,
        is_number(DiameterMeters), DiameterMeters >= 0,
@@ -127,7 +156,7 @@ optimal_level(DiameterMeters) when is_number(DiameterMeters), DiameterMeters > 0
     %% Level = round(log2(BaseDiameter / DiameterMeters)) + 1
     BaseDiameter = 4003017.0,
     Level = round(math:log2(BaseDiameter / DiameterMeters)) + 1,
-    max(1, min(24, Level)).
+    max(1, min(?MAX_RES, Level)).
 
 %% @doc Return the privacy-preserving center point for a location.
 %% This is the orthocenter of the enclosing triangle at the fixed
@@ -139,14 +168,16 @@ disk_center({Lat, Lon}) ->
     orthocenter(PrivacyCode).
 
 %% @doc Returns codes at Res that overlap the GeoJSON shape, using corner mode.
--spec shape(GeoJSON :: map(), Res :: pos_integer()) -> [binary()].
+-spec shape(GeoJSON :: map(), Res :: resolution()) -> [code()].
 shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 
 %% @doc Returns codes at Res that overlap the GeoJSON shape.
 %% Mode can be `corner' (any corner or centroid inside polygon) or
 %% `centroid' (centroid only).
 -spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
-shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
+shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
+       andalso (Mode =:= centroid orelse Mode =:= corner) ->
     case Rings of
         [Outer | _] ->
             LatLonRings = [geojson_ring_to_latlon(R) || R <- Rings],
@@ -155,11 +186,108 @@ shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode) ->
         _ ->
             erlang:error(badarg)
     end;
-shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode) ->
+shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode)
+  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
+       andalso (Mode =:= centroid orelse Mode =:= corner) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
-            shape(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => Rings}, Res, Mode)
-        end, Polys)).
+            shape(#{<<"type">> => <<"Polygon">>,
+                    <<"coordinates">> => Rings}, Res, Mode)
+        end, Polys));
+shape(_, _, _) ->
+    erlang:error(badarg).
+
+%% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
+%% Uses corner mode by default.
+-spec bounds(Bounds :: bounds(), Level :: resolution()) -> [code()].
+bounds(Bounds, Level) ->
+    bounds(Bounds, Level, corner).
+
+bounds(Bounds, Res, Mode)
+  when Res >= 1 andalso Res =< ?MAX_RES
+       andalso (Mode =:= corner orelse Mode =:= centroid) ->
+    NormBounds = normalise_bounds(Bounds),
+    Seeds = bounds_seeds(NormBounds, Res),
+    flood_fill(Seeds,
+               fun(Code) ->
+                       within_bounds(NormBounds, Code, Mode)
+               end);
+bounds(_, _, _) ->
+    erlang:error(badarg).
+
+bounds_seeds({MinLat, MinLon, MaxLat, MaxLon}, Res) ->
+    CenterLat = (MinLat + MaxLat) / 2.0,
+    CenterLon = bounds_center_lon(MinLon, MaxLon),
+    Corners = [{MinLat, MinLon}, {MinLat, MaxLon},
+               {MaxLat, MinLon}, {MaxLat, MaxLon}],
+    lists:usort([encode({CenterLat, CenterLon}, Res) |
+                 [encode(P, Res) || P <- Corners]]).
+
+bounds_center_lon(MinLon, MaxLon) when MinLon =< MaxLon ->
+    (MinLon + MaxLon) / 2.0;
+bounds_center_lon(MinLon, MaxLon) ->
+    %% Range wraps the antimeridian.
+    normalise_lon((MinLon + MaxLon + 360.0) / 2.0, 0.0).
+
+within_bounds(Bounds, Code, corner) ->
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
+    in_bounds(C1, Bounds) orelse in_bounds(C2, Bounds)
+    orelse in_bounds(C3, Bounds) orelse in_bounds(Centroid, Bounds);
+within_bounds(Bounds, Code, centroid) ->
+    in_bounds(decode(Code), Bounds).
+
+in_bounds({Lat, Lon}, {MinLat, MinLon, MaxLat, MaxLon}) ->
+    Lat >= MinLat andalso Lat =< MaxLat andalso lon_in_range(Lon, MinLon, MaxLon).
+
+lon_in_range(Lon, MinLon, MaxLon) when MinLon =< MaxLon ->
+    Lon >= MinLon andalso Lon =< MaxLon;
+lon_in_range(Lon, MinLon, MaxLon) -> %% wraps the antimeridian
+    Lon >= MinLon orelse Lon =< MaxLon.
+
+
+flood_fill(Seeds, WithinFun) ->
+    Visited0 = sets:from_list(Seeds, [{version, 2}]),
+    Queue0 = queue:from_list(Seeds),
+    InitAcc = [S || S <- Seeds, WithinFun(S)],
+    flood_fill_loop(WithinFun, Queue0, Visited0, InitAcc).
+
+flood_fill_loop(WithinFun, Queue0, Visited, Acc) ->
+    case queue:out(Queue0) of
+        {empty, _} -> Acc;
+        {{value, Code}, Queue1} ->
+            {Queue2, Visited1, Acc1} = lists:foldl(
+                fun(NCode, {Q, V, A}) ->
+                    case sets:is_element(NCode, V) of
+                        true -> {Q, V, A};
+                        false ->
+                            V1 = sets:add_element(NCode, V),
+                            case WithinFun(NCode) of
+                                true  -> {queue:in(NCode, Q), V1, [NCode | A]};
+                                false -> {Q, V1, A}
+                            end
+                    end
+                end,
+                {Queue1, Visited, Acc},
+                neighbors(Code)
+            ),
+            flood_fill_loop(WithinFun, Queue2, Visited1, Acc1)
+    end.
+
+shape_bfs(Rings, Mode, Seeds) ->
+    flood_fill(Seeds, fun(Code) -> within_shape(Rings, Code, Mode) end).
+
+normalise_bounds({Lat1, Lon1, Lat2, Lon2})
+  when is_number(Lat1) andalso is_number(Lon1)
+       andalso is_number(Lat2) andalso is_number(Lon2) ->
+    MinLat = min(float(Lat1), float(Lat2)),
+    MaxLat = max(float(Lat1), float(Lat2)),
+
+    NLon1 = normalise_lon(float(Lon1), 0.0),
+    NLon2 = normalise_lon(float(Lon2), 0.0),
+
+    {MinLat, NLon1, MaxLat, NLon2};
+normalise_bounds(_) ->
+    erlang:error(badarg).
 
 disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
@@ -204,17 +332,21 @@ within(Center, Code, RadiusMeters, corner) ->
 within(Center, Code, RadiusMeters, centroid) ->
     centroid_within(Center, Code, RadiusMeters).
 
-%% @doc Check if the triangle overlaps the disk.
-%% A triangle overlaps when any corner OR the centroid is within the radius.
-%% Checking only corners misses cells whose centroid is inside the disk but
-%% whose corners are all outside (common when cells are large relative to the disk).
+within_shape(Rings, Code, corner) ->
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
+    point_in_polygon(C1, Rings)
+    orelse point_in_polygon(C2, Rings)
+    orelse point_in_polygon(C3, Rings)
+    orelse point_in_polygon(Centroid, Rings);
+within_shape(Rings, Code, centroid) ->
+    point_in_polygon(decode(Code), Rings).
+
 any_corner_within(Center, Code, RadiusMeters) ->
-    Corners = cell_geometry(Code),
-    lists:any(fun(Corner) ->
-        great_circle_distance(Center, Corner) =< RadiusMeters
-    end, Corners)
-    orelse
-    centroid_within(Center, Code, RadiusMeters).
+    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
+    great_circle_distance(Center, C1) =< RadiusMeters
+    orelse great_circle_distance(Center, C2) =< RadiusMeters
+    orelse great_circle_distance(Center, C3) =< RadiusMeters
+    orelse great_circle_distance(Center, Centroid) =< RadiusMeters.
 
 %% @doc Check if the triangle's centroid is within the disk.
 centroid_within(Center, Code, RadiusMeters) ->
@@ -225,61 +357,62 @@ great_circle_distance(P1, P2) ->
     {X2, Y2, Z2} = to_xyz(P2),
     Dot0 = X1*X2 + Y1*Y2 + Z1*Z2,
     Dot = if
-        Dot0 > 1.0 -> 1.0;
+        Dot0 > 1.0  -> 1.0;
         Dot0 < -1.0 -> -1.0;
-        true -> Dot0
+        true        -> Dot0
     end,
     math:acos(Dot) * ?EARTH_RADIUS_M.
 
-parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
-    case byte_size(Digits) > 1 of
-        true  -> <<FaceDigits/binary, $-, (binary:part(Digits, 0, byte_size(Digits)-1))/binary>>;
-        false -> <<FaceDigits/binary, $-, Digits/binary>>
-    end.
+%% @doc Reduce Code to the given (coarser or equal) resolution by truncating
+%% its digit string. Res must be between 1 and the code's current resolution.
+-spec coarsen(code(), resolution()) -> code().
+coarsen(<<FaceDigit:1/binary, $-, Digits/binary>> = Code, Res) when is_integer(Res), Res >= 1, Res =< ?MAX_RES ->
+    CurrentRes = byte_size(Digits),
+    case CurrentRes of
+        Res -> Code;
+        _ when Res < CurrentRes ->
+            NewDigits = binary:part(Digits, 0, Res),
+            <<FaceDigit/binary, $-, NewDigits/binary>>;
+        _ ->
+            erlang:error(badarg)
+    end;
+coarsen(_, _) ->
+    erlang:error(badarg).
 
-cell_geometry(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    FaceIdx = binary_to_integer(FaceBin, ?NR_FACES),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
-    
-    [from_xyz(unproject(RV1, FaceIdx)),
+-spec parent(code()) -> code().
+parent(<<_:1/binary, $-, Digits/binary>> =Code) when byte_size(Digits) > 0 ->
+    coarsen(Code, byte_size(Digits)-1);
+parent(<<_:1/binary, $->> =Code) ->
+    Code;
+parent(_) ->
+    erlang:error(badarg).
+
+-spec cell_geometry(code()) -> triangle().
+cell_geometry(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    {from_xyz(unproject(RV1, FaceIdx)),
      from_xyz(unproject(RV2, FaceIdx)),
-     from_xyz(unproject(RV3, FaceIdx))].
+     from_xyz(unproject(RV3, FaceIdx))}.
 
 %% --- Recursive Subdivision (2D Local Space) ---
 
 sub_encode(_P, _Verts, 0, Acc) -> Acc;
 sub_encode(P, {V1, V2, V3}, Res, Acc) ->
-    M12 = mid_2d(V1, V2),
-    M23 = mid_2d(V2, V3),
-    M31 = mid_2d(V3, V1),
-    
     {U, V, W} = barycentric_2d(P, V1, V2, V3),
-    
-    Digit = if
-        U >= 0.5 -> $1;
-        V >= 0.5 -> $2;
-        W >= 0.5 -> $3;
-        true     -> $0
-    end,
-    
-    NewVerts = case Digit of
-        $1 -> {V1, M12, M31};
-        $2 -> {V2, M12, M23};
-        $3 -> {V3, M23, M31};
-        $0 -> {M12, M23, M31}
+    {Digit, NewVerts} = if
+        U >= 0.5 -> {$1, {V1, mid_2d(V1, V2), mid_2d(V3, V1)}};
+        V >= 0.5 -> {$2, {V2, mid_2d(V1, V2), mid_2d(V2, V3)}};
+        W >= 0.5 -> {$3, {V3, mid_2d(V2, V3), mid_2d(V3, V1)}};
+        true     -> {$0, {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}}
     end,
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
 sub_decode(<<Digit, Rest/binary>>, V1, V2, V3) ->
-    M12 = mid_2d(V1, V2),
-    M23 = mid_2d(V2, V3),
-    M31 = mid_2d(V3, V1),
     {NV1, NV2, NV3} = case Digit of
-        $1 -> {V1, M12, M31};
-        $2 -> {V2, M12, M23};
-        $3 -> {V3, M23, M31};
-        $0 -> {M12, M23, M31}
+        $1 -> {V1, mid_2d(V1, V2), mid_2d(V3, V1)};
+        $2 -> {V2, mid_2d(V1, V2), mid_2d(V2, V3)};
+        $3 -> {V3, mid_2d(V2, V3), mid_2d(V3, V1)};
+        $0 -> {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}
     end,
     sub_decode(Rest, NV1, NV2, NV3);
 sub_decode(<<>>, V1, V2, V3) ->
@@ -288,7 +421,7 @@ sub_decode(<<>>, V1, V2, V3) ->
 %% --- Neighbors logic ---
 
 neighbors(Code) ->
-    compute_neighbors(Code, 12). %% 12 directions (edge + vertex)
+    compute_neighbors(Code, ?NEIGHBOR_DIRS). %% 12 directions (edge + vertex)
 
 neighbors_2(Code) ->
     N1 = neighbors(Code),
@@ -296,33 +429,48 @@ neighbors_2(Code) ->
     All -- [Code | N1].
 
 compute_neighbors(Code, NumDirs) ->
-    {Lat, Lon} = decode(Code),
-    [_, Digits] = binary:split(Code, <<"-">>),
+    {FaceIdx, Digits} = parse_code(Code),
     Res = byte_size(Digits),
-    XYZ = to_xyz({Lat, Lon}),
-    FaceIdx = nearest_face(XYZ),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
-    
-    {RV1, RV2, _RV3} = sub_decode(Digits, V1, V2, V3),
-    Side = dist_2d(RV1, RV2),
-    Shift = Side * 0.9, %% Move far enough to hit the next triangle
-    
-    Angles = [I * (2 * math:pi() / NumDirs) || I <- lists:seq(0, NumDirs-1)],
-    {CX, CY} = project(XYZ, FaceIdx),
-    
+    {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
+
+    Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
+    Center2D = centroid_2d(RV1, RV2, RV3),
+    Candidates = ring_points_2d(Center2D, Shift, NumDirs),
+
+    %% Fetch these tables ONCE per cell instead of once per candidate
+    %% direction — all 12 candidates share the same hint face.
+    FaceCentres = face_centres(),
+    HintCentre = element(FaceIdx+1, FaceCentres),
+    NeighborIdxs = tuple_to_list(element(FaceIdx+1, face_adjacencies())),
+
     lists:usort([begin
-        SX = CX + Shift * math:cos(A),
-        SY = CY + Shift * math:sin(A),
-        NewXYZ = unproject({SX, SY}, FaceIdx),
-        
-        %% Optimized encoding using Hint
-        NewFaceIdx = nearest_face(NewXYZ, FaceIdx),
-        {NX, NY} = project(NewXYZ, NewFaceIdx),
-        {V1n, V2n, V3n} = face_verts_2d(NewFaceIdx),
-        NDigits = sub_encode({NX, NY}, {V1n, V2n, V3n}, Res, <<>>),
-        FaceBin = element(NewFaceIdx+1, face_bins()),
-        <<FaceBin/binary, $-, NDigits/binary>>
-    end || A <- Angles]) -- [Code].
+                     XYZ = unproject(P, FaceIdx),
+                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre,
+                                                   NeighborIdxs, FaceCentres),
+                     encode_at_face(XYZ, Res, NFaceIdx)
+                 end || P <- Candidates]) -- [Code].
+
+nearest_face_fast({X,Y,Z}=XYZ, HintFace, {HCx,HCy,HCz}, NeighborIdxs, FaceCentres) ->
+    D0 = X*HCx + Y*HCy + Z*HCz,
+    search_faces_fast(XYZ, NeighborIdxs, FaceCentres, D0, HintFace).
+
+search_faces_fast(_XYZ, [], _FaceCentres, _MaxD, MaxIdx) ->
+    MaxIdx;
+search_faces_fast({X,Y,Z}=XYZ, [FaceIdx|Rest], FaceCentres, MaxD, MaxIdx) ->
+    {Cx,Cy,Cz} = element(FaceIdx+1, FaceCentres),
+    D = X*Cx + Y*Cy + Z*Cz,
+    if D > MaxD -> search_faces_fast(XYZ, Rest, FaceCentres, D, FaceIdx);
+       true     -> search_faces_fast(XYZ, Rest, FaceCentres, MaxD, MaxIdx)
+    end.
+
+centroid_2d({X1,Y1}, {X2,Y2}, {X3,Y3}) ->
+    {(X1+X2+X3)/3.0, (Y1+Y2+Y3)/3.0}.
+
+ring_points_2d({CX, CY}, Shift, NumDirs) ->
+    [{CX + Shift * math:cos(A), CY + Shift * math:sin(A)}
+     || I <- lists:seq(0, NumDirs - 1),
+        A <- [I * (2 * math:pi() / NumDirs)]].
 
 dist_2d({X1,Y1}, {X2,Y2}) ->
     DX = X1-X2, DY = Y1-Y2,
@@ -367,48 +515,37 @@ orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
 
 %% --- Standard Geometry ---
 
+-spec to_xyz(latlon()) -> xyz().
 to_xyz({Lat, Lon}) ->
     Lo = Lon * ?D2R,
     La = Lat * ?D2R,
     {math:cos(La)*math:cos(Lo), math:cos(La)*math:sin(Lo), math:sin(La)}.
 
+-spec from_xyz(xyz()) -> latlon().
 from_xyz({X, Y, Z}) ->
     Lon = math:atan2(Y, X) / ?D2R,
     Lat = math:asin(Z) / ?D2R,
     {Lat, Lon}.
 
+-spec unit(xyz()) -> xyz().
 unit({X, Y, Z}) ->
     R = math:sqrt(X*X + Y*Y + Z*Z),
     {X/R, Y/R, Z/R}.
 
+-spec cross(xyz(), xyz()) -> xyz().
 cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
     {Ay*Bz - Az*By, Az*Bx - Ax*Bz, Ax*By - Ay*Bx}.
 
 nearest_face(XYZ) ->
-    nearest_face(XYZ, face_centres_list(), 0, -2.0, 0).
-
-nearest_face({X,Y,Z}=XYZ, HintFace) ->
-    Neighbors = element(HintFace+1, face_adjacencies()),
-    CheckFaces = tuple_to_list(Neighbors),
-    {Cx,Cy,Cz} = lists:nth(HintFace+1, face_centres_list()),
-    D = X*Cx + Y*Cy + Z*Cz,
-    search_faces(XYZ, CheckFaces, D, HintFace).
-
-search_faces(_XYZ, [], _MaxD, MaxIdx) ->
-    MaxIdx;
-search_faces({X,Y,Z}=XYZ, [FaceIdx|Rest], MaxD, MaxIdx) ->
-    {Cx,Cy,Cz} = lists:nth(FaceIdx+1, face_centres_list()),
-    D = X*Cx + Y*Cy + Z*Cz,
-    if D > MaxD -> search_faces(XYZ, Rest, D, FaceIdx);
-       true -> search_faces(XYZ, Rest, MaxD, MaxIdx)
-    end.
+    nearest_face(XYZ, tuple_to_list(face_centres()), 0, -2.0, 0).
 
 nearest_face(_XYZ, [], _Idx, _MaxD, MaxIdx) ->
     MaxIdx;
 nearest_face({X,Y,Z}=XYZ, [{Cx,Cy,Cz}|Rest], Idx, MaxD, MaxIdx) ->
     D = X*Cx + Y*Cy + Z*Cz,
-    if D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
-       true -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
+    if
+        D > MaxD -> nearest_face(XYZ, Rest, Idx+1, D, Idx);
+        true     -> nearest_face(XYZ, Rest, Idx+1, MaxD, MaxIdx)
     end.
 
 %% --- Shape / GeoJSON helpers ---
@@ -419,8 +556,11 @@ polygon_seeds(OuterRing, Res) ->
         [] -> [];
         _ ->
             {SumLat, SumLon, N} = lists:foldl(
-                fun({Lat, Lon}, {SLat, SLon, Cnt}) -> {SLat+Lat, SLon+Lon, Cnt+1} end,
-                {0.0, 0.0, 0}, LatLons),
+                                    fun({Lat, Lon}, {SLat, SLon, Cnt}) ->
+                                            {SLat+Lat, SLon+Lon, Cnt+1}
+                                    end,
+                                    {0.0, 0.0, 0},
+                                    LatLons),
             Centroid = {SumLat/N, SumLon/N},
             VertexCells = lists:usort([encode(P, Res) || P <- LatLons]),
             lists:usort([encode(Centroid, Res) | VertexCells])
@@ -429,15 +569,11 @@ polygon_seeds(OuterRing, Res) ->
 geojson_ring_to_latlon(Ring) ->
     [{lat_of(V), lon_of(V)} || V <- Ring].
 
-lat_of([_Lon, Lat | _]) -> Lat.
-lon_of([Lon | _]) -> Lon.
+lat_of([_Lon, Lat | _]) ->
+    Lat.
 
-within_shape(Rings, Code, corner) ->
-    Corners = cell_geometry(Code),
-    Centroid = decode(Code),
-    lists:any(fun(P) -> point_in_polygon(P, Rings) end, [Centroid | Corners]);
-within_shape(Rings, Code, centroid) ->
-    point_in_polygon(decode(Code), Rings).
+lon_of([Lon | _]) ->
+    Lon.
 
 point_in_polygon({Lat, Lon}, [Outer | Holes]) ->
     ray_cast({Lat, Lon}, Outer) andalso
@@ -469,46 +605,28 @@ ray_cast({Lat, Lon}, Ring) ->
 
 normalise_lon(VertLon, TestLon) ->
     DLon = VertLon - TestLon,
-    if DLon > 180.0  -> VertLon - 360.0;
-       DLon < -180.0 -> VertLon + 360.0;
-       true           -> VertLon
-    end.
-
-shape_bfs(Rings, Mode, Seeds) ->
-    Visited0 = sets:from_list(Seeds, [{version, 2}]),
-    Queue0 = queue:from_list(Seeds),
-    InitAcc = [S || S <- Seeds, within_shape(Rings, S, Mode)],
-    shape_bfs_loop(Rings, Mode, Queue0, Visited0, InitAcc).
-
-shape_bfs_loop(Rings, Mode, Queue0, Visited, Acc) ->
-    case queue:out(Queue0) of
-        {empty, _} -> Acc;
-        {{value, Code}, Queue1} ->
-            {Queue2, Visited1, Acc1} = lists:foldl(
-                fun(NCode, {Q, V, A}) ->
-                    case sets:is_element(NCode, V) of
-                        true -> {Q, V, A};
-                        false ->
-                            V1 = sets:add_element(NCode, V),
-                            case within_shape(Rings, NCode, Mode) of
-                                true  -> {queue:in(NCode, Q), V1, [NCode | A]};
-                                false -> {Q, V1, A}
-                            end
-                    end
-                end,
-                {Queue1, Visited, Acc},
-                neighbors(Code)
-            ),
-            shape_bfs_loop(Rings, Mode, Queue2, Visited1, Acc1)
+    if
+        DLon > 180.0  -> VertLon - 360.0;
+        DLon < -180.0 -> VertLon + 360.0;
+        true          -> VertLon
     end.
 
 %% --- Persistent Data ---
 
-face_basis(Face) -> element(Face+1, persistent_term:get({?MODULE, face_bases})).
-face_bins() -> persistent_term:get({?MODULE, face_bins}).
-face_verts_2d(Idx) -> element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
-face_centres_list() -> persistent_term:get({?MODULE, face_centres}).
-face_adjacencies() -> persistent_term:get({?MODULE, face_adjacencies}).
+face_basis(Face) ->
+    element(Face+1, persistent_term:get({?MODULE, face_bases})).
+
+face_bins() ->
+    persistent_term:get({?MODULE, face_bins}).
+
+face_verts_2d(Idx) ->
+    element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
+
+face_centres() ->
+    persistent_term:get({?MODULE, face_centres}).
+
+face_adjacencies() ->
+    persistent_term:get({?MODULE, face_adjacencies}).
 
 init_persistent_terms() ->
     UpLat = math:atan(0.5) / ?D2R,
@@ -531,7 +649,7 @@ init_persistent_terms() ->
                    {Cx,Cy,Cz} = element(C+1, VT),
                    unit({(Ax+Bx+Cx)/3.0, (Ay+By+Cy)/3.0, (Az+Bz+Cz)/3.0})
                end || {A,B,C} <- Faces],
-    persistent_term:put({?MODULE, face_centres}, Centres),
+    persistent_term:put({?MODULE, face_centres}, list_to_tuple(Centres)),
 
     %% Calculate Face Adjacencies
     Adj = [begin
@@ -581,3 +699,34 @@ find_neighbor(MyIdx, Va, Vb, Faces) ->
                             lists:member(Va, tuple_to_list(F)),
                             lists:member(Vb, tuple_to_list(F))],
     NeighborIdx.
+
+%%
+%% Helpers
+%%
+
+-spec digits(code()) -> binary().
+digits(Code) ->
+    {_, DigitsBin} = parse_code(Code),
+    DigitsBin.
+
+% --- shared XYZ -> code helper (used by encode/2 and compute_neighbors) ---
+
+encode_from_xyz(XYZ, Res) ->
+    encode_at_face(XYZ, Res, nearest_face(XYZ)).
+
+encode_at_face(XYZ, Res, FaceIdx) ->
+    {X, Y} = project(XYZ, FaceIdx),
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
+    FaceBin = element(FaceIdx+1, face_bins()),
+    <<FaceBin/binary, $-, Digits/binary>>.
+
+%% Corners and centroid from a single parse_code + sub_decode walk.
+cell_corners_and_centroid(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    C1 = from_xyz(unproject(RV1, FaceIdx)),
+    C2 = from_xyz(unproject(RV2, FaceIdx)),
+    C3 = from_xyz(unproject(RV3, FaceIdx)),
+    Centroid = from_xyz(unproject(centroid_2d(RV1, RV2, RV3), FaceIdx)),
+    {C1, C2, C3, Centroid}.
+

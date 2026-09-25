@@ -46,12 +46,11 @@ neighbors_test() ->
 %% cell_geometry returns 3 corner coordinates as {Lat, Lon} floats
 cell_geometry_test() ->
     Code = ambit:encode({20.0, 10.0}, 6),
-    Corners = ambit:cell_geometry(Code),
-    ?assertEqual(3, length(Corners)),
+    {C1, C2, C3} = ambit:cell_geometry(Code),
     lists:foreach(fun({Lat, Lon}) ->
         ?assert(is_float(Lat)),
         ?assert(is_float(Lon))
-    end, Corners).
+    end, [C1, C2, C3]).
 
 %% Test neighborhood consistency
 neighbor_consistency_test() ->
@@ -197,3 +196,96 @@ shape_all_decodable_test() ->
         ?assert(is_float(Lat)),
         ?assert(is_float(Lon))
     end, Codes).
+
+%% bounds basic test
+bounds_basic_test() ->
+    Bounds = {52.3, 4.8, 52.5, 5.1},
+    Res = 12,
+    Codes = ambit:bounds(Bounds, Res),
+    ?assert(length(Codes) > 0),
+
+    %% Codes should be unique
+    ?assertEqual(lists:sort(Codes), lists:usort(Codes)),
+
+    %% It should be able to decode the codes.
+    lists:foreach(fun(C) ->
+                          ?assert(is_binary(C)),
+                          {Lat, Lon} = ambit:decode(C),
+                          ?assert(is_float(Lat)),
+                          ?assert(is_float(Lon))
+                  end, Codes).
+
+%% bounds mode test: centroid mode is a subset of corner mode
+bounds_mode_test() ->
+    Bounds = {52.3, 4.8, 52.5, 5.1},
+    Res = 12,
+    Corner   = ambit:bounds(Bounds, Res, corner),
+    Centroid = ambit:bounds(Bounds, Res, centroid),
+
+    ?assert(length(Corner) >= length(Centroid)),
+    ?assert(length(Centroid) > 0),
+
+    %% Every centroid code must appear in the corner results
+    lists:foreach(fun(C) ->
+        ?assert(lists:member(C, Corner))
+    end, Centroid),
+
+    %% In centroid mode, all decoded centroids must strictly fall within bounds
+    lists:foreach(fun(C) ->
+                          {Lat, Lon} = ambit:decode(C),
+                          ?assert(Lat >= 52.3 andalso Lat =< 52.5),
+                          ?assert(Lon >= 4.8 andalso Lon =< 5.1)
+                  end, Centroid).
+
+%% bounds default mode should match corner mode
+bounds_default_mode_test() ->
+    Bounds = {52.3, 4.8, 52.5, 5.1},
+    Res = 12,
+    Default = ambit:bounds(Bounds, Res),
+    Corner  = ambit:bounds(Bounds, Res, corner),
+    ?assertEqual(Default, Corner).
+
+%% bounds across multiple icosahedral faces
+bounds_cross_face_test() ->
+    %% Wide bounds crossing face boundaries near equator
+    Bounds = {-5.0, -10.0, 15.0, 40.0},
+    Codes = ambit:bounds(Bounds, 6),
+    ?assert(length(Codes) > 0),
+    %% Verify multiple faces are present in the results
+    Faces = lists:usort([hd(binary:split(C, <<"-">>)) || C <- Codes]),
+    ?assert(length(Faces) > 1),
+    ?assertEqual(lists:sort(Codes), lists:usort(Codes)).
+
+%% bounds antimeridian crossing test
+bounds_antimeridian_test() ->
+    Bounds = {-10.0, 175.0, 10.0, -175.0},
+    Codes = ambit:bounds(Bounds, 7),
+    ?assert(length(Codes) > 0),
+    ?assertEqual(lists:sort(Codes), lists:usort(Codes)).
+
+%% bounds vs shape consistency test for equivalent rectangular polygon
+bounds_vs_shape_test() ->
+    MinLat = 52.35, MinLon = 4.85, MaxLat = 52.45, MaxLon = 4.95,
+    Bounds = {MinLat, MinLon, MaxLat, MaxLon},
+    GeoJSON = #{<<"type">> => <<"Polygon">>,
+                <<"coordinates">> => [[
+                    [MinLon, MinLat], [MaxLon, MinLat], [MaxLon, MaxLat], [MinLon, MaxLat], [MinLon, MinLat]
+                ]]},
+    Res = 13,
+    ShapeCentroid = lists:sort(ambit:shape(GeoJSON, Res, centroid)),
+    BoundsCentroid = lists:sort(ambit:bounds(Bounds, Res, centroid)),
+    ?assertEqual(ShapeCentroid, BoundsCentroid),
+    ShapeCorner = lists:sort(ambit:shape(GeoJSON, Res, corner)),
+    BoundsCorner = lists:sort(ambit:bounds(Bounds, Res, corner)),
+    %% bounds finds all shape corner codes plus edge-crossing triangles
+    lists:foreach(fun(C) ->
+        ?assert(lists:member(C, BoundsCorner))
+    end, ShapeCorner),
+    ?assert(length(BoundsCorner) >= length(ShapeCorner)).
+
+%% bounds badarg validation
+bounds_badarg_test() ->
+    ?assertError(badarg, ambit:bounds({1, 2, 3}, 10)),
+    ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 0)),
+    ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 25)),
+    ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 10, invalid_mode)).
