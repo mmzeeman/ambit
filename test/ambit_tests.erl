@@ -46,12 +46,11 @@ neighbors_test() ->
 %% cell_geometry returns 3 corner coordinates as {Lat, Lon} floats
 cell_geometry_test() ->
     Code = ambit:encode({20.0, 10.0}, 6),
-    Corners = ambit:cell_geometry(Code),
-    ?assertEqual(3, length(Corners)),
+    {C1, C2, C3} = ambit:cell_geometry(Code),
     lists:foreach(fun({Lat, Lon}) ->
         ?assert(is_float(Lat)),
         ?assert(is_float(Lon))
-    end, Corners).
+    end, [C1, C2, C3]).
 
 %% Test neighborhood consistency
 neighbor_consistency_test() ->

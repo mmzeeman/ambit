@@ -254,7 +254,7 @@ data.forEach(d => {
     io:format("Generated ambit_viz.html~n").
 
 to_json(Code, Color, Weight, Opacity) ->
-    Coords = ambit:cell_geometry(Code),
+    Coords = tuple_to_list(ambit:cell_geometry(Code)),
     CoordJson = "[" ++ string:join([io_lib:format("[~f, ~f]", [La, Lo]) || {La, Lo} <- Coords], ",") ++ "]",
     io_lib:format("{\"code\": \"~s\", \"color\": \"~s\", \"weight\": ~p, \"opacity\": ~f, \"coords\": ~s}",
                   [Code, Color, Weight, float(Opacity), CoordJson]).

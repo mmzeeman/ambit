@@ -2,10 +2,12 @@
 %% Uses the exact same projection engine as Hexveil for alignment.
 
 -module(ambit).
+-on_load(init_persistent_terms/0).
 
 -export([
     encode/2, encode/1,
     decode/1,
+    resolution/1,
     orthocenter/1,
     disk/2, disk/3, disk/4,
     disk_center/1,
@@ -19,13 +21,34 @@
     bounds/2, bounds/3
 ]).
 
--on_load(init_persistent_terms/0).
+-type lat()      :: float().
+-type lon()      :: float().
+-type latlon()   :: {lat(), lon()}.
+-type triangle() :: {latlon(), latlon(), latlon()}.
+
+-type xyz()      :: {float(), float(), float()}.
+
+-type resolution() :: 1..24.
+-type face_idx()   :: 0..19.
+
+-type meters() :: number().
+
+-type code() :: <<_:16, _:_*8>>. % code is at least two bytes long.
 
 -type disk_mode() :: corner | centroid.
--type bounds() :: {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}
-                | [number()].
 
--export_type([disk_mode/0, bounds/0]).
+-type bounds() ::
+    {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
+
+-export_type([
+    code/0,
+    latlon/0,
+    triangle/0,
+    resolution/0,
+    meters/0,
+    disk_mode/0,
+    bounds/0
+]).
 
 -define(D2R, 0.017453292519943295).
 -define(DEFAULT_RES, 14).
@@ -38,9 +61,11 @@
 -define(NEIGHBOR_DIRS, 12).
 -define(NEIGHBOR_SHIFT_FACTOR, 0.9).
 
+-spec encode(latlon()) -> code().
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
 
+-spec encode(latlon(), resolution()) -> code().
 encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
     XYZ = to_xyz({Lat, Lon}),
     FaceIdx = nearest_face(XYZ),
@@ -55,6 +80,7 @@ encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
     FaceBin = element(FaceIdx+1, face_bins()),
     <<FaceBin/binary, $-, Digits/binary>>.
 
+-spec parse_code(code()) -> {face_idx(), binary()}.
 parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
     {binary_to_integer(FaceBin, ?NR_FACES), DigitsBin};
 parse_code(_) ->
@@ -65,6 +91,7 @@ cell_vertices(Code) ->
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {FaceIdx, sub_decode(Digits, V1, V2, V3)}.
 
+-spec decode(code()) -> latlon().
 decode(Code) ->
     {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     
@@ -76,21 +103,20 @@ decode(Code) ->
     XYZ = unproject({CX, CY}, FaceIdx),
     from_xyz(XYZ).
 
-digits(Code) ->
-    {_, DigitsBin} = parse_code(Code),
-    DigitsBin.
-
+-spec resolution(code()) -> resolution().
 resolution(Code) ->
     byte_size(digits(Code)).
 
 %% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
 %% The orthocenter is the intersection of the triangle's three altitudes.
+-spec orthocenter(code()) -> latlon().
 orthocenter(Code) ->
     {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
     XYZ = unproject({OX, OY}, FaceIdx),
     from_xyz(XYZ).
 
+-spec disk(code() | latlon(), meters()) -> [code()].
 disk(Code, DiameterMeters)
   when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
     case resolution(Code) of
@@ -104,6 +130,7 @@ disk({Lat, Lon}, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
 
+-spec disk(latlon(), resolution(), meters()) -> [code()].
 disk({Lat, Lon}, Res, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk_from_center({Lat, Lon}, Res, DiameterMeters, corner).
@@ -117,8 +144,7 @@ disk({Lat, Lon}, Res, DiameterMeters)
 %%                slightly larger coverage).
 %%   `centroid' – include the triangle only when its centroid falls
 %%                within the radius (tighter fit).
--spec disk({Lat :: float(), Lon :: float()}, Res :: pos_integer(),
-           DiameterMeters :: number(), Mode :: disk_mode()) -> [binary()].
+-spec disk(latlon(), resolution(), meters(), disk_mode()) -> [code()].
 disk({Lat, Lon}, Res, DiameterMeters, Mode)
   when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0,
        is_number(DiameterMeters), DiameterMeters >= 0,
@@ -157,7 +183,7 @@ disk_center({Lat, Lon}) ->
     orthocenter(PrivacyCode).
 
 %% @doc Returns codes at Res that overlap the GeoJSON shape, using corner mode.
--spec shape(GeoJSON :: map(), Res :: pos_integer()) -> [binary()].
+-spec shape(GeoJSON :: map(), Res :: resolution()) -> [code()].
 shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 
 %% @doc Returns codes at Res that overlap the GeoJSON shape.
@@ -180,14 +206,15 @@ shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode
        andalso (Mode =:= centroid orelse Mode =:= corner) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
-            shape(#{<<"type">> => <<"Polygon">>, <<"coordinates">> => Rings}, Res, Mode)
+            shape(#{<<"type">> => <<"Polygon">>,
+                    <<"coordinates">> => Rings}, Res, Mode)
         end, Polys));
 shape(_, _, _) ->
     erlang:error(badarg).
 
 %% @doc Return codes at Level that overlap the bounding box {MinLat, MinLon, MaxLat, MaxLon}.
 %% Uses corner mode by default.
--spec bounds(Bounds :: bounds(), Level :: pos_integer()) -> [binary()].
+-spec bounds(Bounds :: bounds(), Level :: resolution()) -> [code()].
 bounds(Bounds, Level) ->
     bounds(Bounds, Level, corner).
 
@@ -267,12 +294,12 @@ within(Center, Code, RadiusMeters, centroid) ->
 %% Checking only corners misses cells whose centroid is inside the disk but
 %% whose corners are all outside (common when cells are large relative to the disk).
 any_corner_within(Center, Code, RadiusMeters) ->
-    Corners = cell_geometry(Code),
-    lists:any(fun(Corner) ->
-        great_circle_distance(Center, Corner) =< RadiusMeters
-    end, Corners)
-    orelse
-    centroid_within(Center, Code, RadiusMeters).
+    {C1, C2, C3} = cell_geometry(Code),
+
+    great_circle_distance(Center, C1) =< RadiusMeters
+    orelse great_circle_distance(Center, C2) =< RadiusMeters
+    orelse great_circle_distance(Center, C3) =< RadiusMeters
+    orelse centroid_within(Center, Code, RadiusMeters).
 
 %% @doc Check if the triangle's centroid is within the disk.
 centroid_within(Center, Code, RadiusMeters) ->
@@ -289,17 +316,19 @@ great_circle_distance(P1, P2) ->
     end,
     math:acos(Dot) * ?EARTH_RADIUS_M.
 
+-spec parent(code()) -> code().
 parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
     case byte_size(Digits) > 1 of
         true  -> <<FaceDigits/binary, $-, (binary:part(Digits, 0, byte_size(Digits)-1))/binary>>;
         false -> <<FaceDigits/binary, $-, Digits/binary>>
     end.
 
+-spec cell_geometry(code()) -> triangle().
 cell_geometry(Code) ->
     {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
-    [from_xyz(unproject(RV1, FaceIdx)),
+    {from_xyz(unproject(RV1, FaceIdx)),
      from_xyz(unproject(RV2, FaceIdx)),
-     from_xyz(unproject(RV3, FaceIdx))].
+     from_xyz(unproject(RV3, FaceIdx))}.
 
 %% --- Recursive Subdivision (2D Local Space) ---
 
@@ -423,20 +452,24 @@ orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
 
 %% --- Standard Geometry ---
 
+-spec to_xyz(latlon()) -> xyz().
 to_xyz({Lat, Lon}) ->
     Lo = Lon * ?D2R,
     La = Lat * ?D2R,
     {math:cos(La)*math:cos(Lo), math:cos(La)*math:sin(Lo), math:sin(La)}.
 
+-spec from_xyz(xyz()) -> latlon().
 from_xyz({X, Y, Z}) ->
     Lon = math:atan2(Y, X) / ?D2R,
     Lat = math:asin(Z) / ?D2R,
     {Lat, Lon}.
 
+-spec unit(xyz()) -> xyz().
 unit({X, Y, Z}) ->
     R = math:sqrt(X*X + Y*Y + Z*Z),
     {X/R, Y/R, Z/R}.
 
+-spec cross(xyz(), xyz()) -> xyz().
 cross({Ax, Ay, Az}, {Bx, By, Bz}) ->
     {Ay*Bz - Az*By, Az*Bx - Ax*Bz, Ax*By - Ay*Bx}.
 
@@ -496,12 +529,11 @@ lon_of([Lon | _]) ->
     Lon.
 
 within_shape(Rings, Code, corner) ->
-    Corners = cell_geometry(Code),
-    Centroid = decode(Code),
-    lists:any(fun(P) ->
-                      point_in_polygon(P, Rings)
-              end,
-              [Centroid | Corners]);
+    {C1, C2, C3} = cell_geometry(Code),
+    point_in_polygon(C1, Rings)
+    orelse point_in_polygon(C2, Rings)
+    orelse point_in_polygon(C3, Rings)
+    orelse point_in_polygon(decode(Code), Rings);
 within_shape(Rings, Code, centroid) ->
     point_in_polygon(decode(Code), Rings).
 
@@ -648,3 +680,14 @@ find_neighbor(MyIdx, Va, Vb, Faces) ->
                             lists:member(Va, tuple_to_list(F)),
                             lists:member(Vb, tuple_to_list(F))],
     NeighborIdx.
+
+%%
+%% Helpers
+%%
+
+-spec digits(code()) -> binary().
+digits(Code) ->
+    {_, DigitsBin} = parse_code(Code),
+    DigitsBin.
+
+
