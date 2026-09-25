@@ -2,6 +2,22 @@
 %% Uses the exact same projection engine as Hexveil for alignment.
 
 -module(ambit).
+-moduledoc """
+# Ambit - Icosahedral Gnomonic Aperture 4 Triangle Grid
+
+A hierarchical Discrete Global Grid System (DGGS) that tiles the sphere with triangles.
+
+## Model
+
+The Earth is modeled as an icosahedron (20 faces) projected to the sphere.
+Each face is gnomonically projected to a 2D plane and recursively subdivided
+with aperture 4: each triangle splits into 4 children (3 corner + 1 central inverted).
+
+A code is `<<FaceBase20, "-", Digits/binary>>` where `FaceBase20` is `0..J`
+(0-19 in base-20) and each digit `0..3` is a child index. Resolution is
+`byte_size(Digits)`, 0..24.
+""".
+
 -on_load(init_persistent_terms/0).
 
 -export([
@@ -288,7 +304,7 @@ disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% resolution so that the circle does not shift when the user
     %% changes the disk resolution.
     DiskCenter = disk_center(Center),
-    StartCode = encode(Center, Res),
+    StartCode = encode(DiskCenter, Res),
     RadiusMeters = DiameterMeters / 2.0,
     Visited0 = sets:from_list([StartCode], [{version, 2}]),
     Queue0 = queue:from_list([StartCode]),
@@ -423,32 +439,65 @@ neighbors_2(Code) ->
     All = lists:usort(lists:flatten([neighbors(C) || C <- N1])),
     All -- [Code | N1].
 
+%compute_neighbors(Code, NumDirs) ->
+%    {FaceIdx, Digits} = parse_code(Code),
+%    Res = byte_size(Digits),
+%    {V1, V2, V3} = face_verts_2d(FaceIdx),
+%    {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
+%
+%    Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
+%    Center2D = centroid_2d(RV1, RV2, RV3),
+%    Candidates = ring_points_2d(Center2D, Shift, NumDirs),
+%
+%    %% Fetch these tables ONCE per cell instead of once per candidate
+%    %% direction — all 12 candidates share the same hint face.
+%    FaceCentres = face_centres(),
+%    HintCentre = element(FaceIdx+1, FaceCentres),
+%
+%    lists:usort([begin
+%                     XYZ = unproject(P, FaceIdx),
+%                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre, FaceCentres),
+%                     encode_at_face(XYZ, Res, NFaceIdx)
+%                 end || P <- Candidates]) -- [Code].
+
 compute_neighbors(Code, NumDirs) ->
     {FaceIdx, Digits} = parse_code(Code),
     Res = byte_size(Digits),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
 
-    Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
+    Shift = dist_2d(RV1, RV2) *?NEIGHBOR_SHIFT_FACTOR,
     Center2D = centroid_2d(RV1, RV2, RV3),
     Candidates = ring_points_2d(Center2D, Shift, NumDirs),
 
-    %% Fetch these tables ONCE per cell instead of once per candidate
-    %% direction — all 12 candidates share the same hint face.
     FaceCentres = face_centres(),
     HintCentre = element(FaceIdx+1, FaceCentres),
-    NeighborIdxs = tuple_to_list(element(FaceIdx+1, face_adjacencies())),
 
-    lists:usort([begin
+    % 1. Unproject once, 2. Dedup XYZ by quantizing (avoids re-encoding same face 3x)
+    % 3. Find nearest face using vertex-neighbor ring
+    Encoded = lists:usort([begin
                      XYZ = unproject(P, FaceIdx),
-                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre,
-                                                   NeighborIdxs, FaceCentres),
+                     NFaceIdx = nearest_face_fast(XYZ, FaceIdx, HintCentre, FaceCentres),
                      encode_at_face(XYZ, Res, NFaceIdx)
-                 end || P <- Candidates]) -- [Code].
+                 end || P <- Candidates]),
+    Encoded -- [Code].
 
-nearest_face_fast({X,Y,Z}=XYZ, HintFace, {HCx,HCy,HCz}, NeighborIdxs, FaceCentres) ->
+nearest_face_fast({X,Y,Z}=XYZ, HintFace, HintCentre, FaceCentres) ->
+    % Start with hint face dot product
+    {HCx,HCy,HCz} = HintCentre,
     D0 = X*HCx + Y*HCy + Z*HCz,
-    search_faces_fast(XYZ, NeighborIdxs, FaceCentres, D0, HintFace).
+
+    % Candidates = edge neighbors + vertex neighbors = all faces sharing a vertex
+    % This guarantees we find the correct face for any shift < 1 edge length
+    CandidateIdxs = element(HintFace+1, face_vertex_neighbors()),
+
+    search_faces_fast(XYZ, CandidateIdxs, FaceCentres, D0, HintFace).
+
+% If you want absolute safety (20 dot products is ~0.2us), just search all:
+% nearest_face_fast(XYZ, HintFace, HintCentre, FaceCentres) ->
+% search_faces_fast(XYZ, lists:seq(0,19) -- [HintFace], FaceCentres, D0, HintFace)
+
+
 
 search_faces_fast(_XYZ, [], _FaceCentres, _MaxD, MaxIdx) ->
     MaxIdx;
@@ -608,6 +657,37 @@ normalise_lon(VertLon, TestLon) ->
         true          -> VertLon
     end.
 
+%%
+%% Helpers
+%%
+
+-spec digits(code()) -> binary().
+digits(Code) ->
+    {_, DigitsBin} = parse_code(Code),
+    DigitsBin.
+
+% --- shared XYZ -> code helper (used by encode/2 and compute_neighbors) ---
+
+encode_from_xyz(XYZ, Res) ->
+    encode_at_face(XYZ, Res, nearest_face(XYZ)).
+
+encode_at_face(XYZ, Res, FaceIdx) ->
+    {X, Y} = project(XYZ, FaceIdx),
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
+    FaceBin = element(FaceIdx+1, face_bins()),
+    <<FaceBin/binary, $-, Digits/binary>>.
+
+%% Corners and centroid from a single parse_code + sub_decode walk.
+cell_corners_and_centroid(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    C1 = from_xyz(unproject(RV1, FaceIdx)),
+    C2 = from_xyz(unproject(RV2, FaceIdx)),
+    C3 = from_xyz(unproject(RV3, FaceIdx)),
+    Centroid = from_xyz(unproject(centroid_2d(RV1, RV2, RV3), FaceIdx)),
+    {C1, C2, C3, Centroid}.
+
+
 %% --- Persistent Data ---
 
 face_basis(Face) ->
@@ -622,8 +702,8 @@ face_verts_2d(Idx) ->
 face_centres() ->
     persistent_term:get({?MODULE, face_centres}).
 
-face_adjacencies() ->
-    persistent_term:get({?MODULE, face_adjacencies}).
+face_vertex_neighbors() ->
+    persistent_term:get({?MODULE, face_vertex_neighbors}).
 
 init_persistent_terms() ->
     UpLat = math:atan(0.5) / ?D2R,
@@ -648,14 +728,25 @@ init_persistent_terms() ->
                end || {A,B,C} <- Faces],
     persistent_term:put({?MODULE, face_centres}, list_to_tuple(Centres)),
 
-    %% Calculate Face Adjacencies
-    Adj = [begin
-        {V0, V1, V2} = lists:nth(I+1, Faces),
-        {find_neighbor(I, V1, V2, Faces),
-         find_neighbor(I, V2, V0, Faces),
-         find_neighbor(I, V0, V1, Faces)}
-    end || I <- lists:seq(0, 19)],
-    persistent_term:put({?MODULE, face_adjacencies}, list_to_tuple(Adj)),
+    %% Vertex -> faces map
+    VertexToFaces = lists:foldl(fun({FaceIdx, {A,B,C}}, Acc) ->
+        Acc1 = maps:update_with(A, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc),
+        Acc2 = maps:update_with(B, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc1),
+        maps:update_with(C, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc2)
+    end, #{}, lists:zip(lists:seq(0,19), Faces)),
+
+    FaceVertexNeighbors = list_to_tuple([
+        begin
+            {A,B,C} = lists:nth(FaceIdx+1, Faces),
+            All = lists:usort(
+                maps:get(A, VertexToFaces) ++
+                maps:get(B, VertexToFaces) ++
+                maps:get(C, VertexToFaces)
+            ),
+            All -- [FaceIdx]
+        end || FaceIdx <- lists:seq(0,19)
+    ]),
+    persistent_term:put({?MODULE, face_vertex_neighbors}, FaceVertexNeighbors),
 
     %% Calculate Face Bases (U/V vectors)
     Bases = [begin
@@ -690,40 +781,4 @@ init_persistent_terms() ->
     persistent_term:put({?MODULE, face_bins}, 
                         list_to_tuple([integer_to_binary(I, 20) || I <- lists:seq(0, 19)])).
 
-find_neighbor(MyIdx, Va, Vb, Faces) ->
-    [NeighborIdx] = [Idx || {Idx, F} <- lists:zip(lists:seq(0, 19), Faces),
-                            Idx /= MyIdx,
-                            lists:member(Va, tuple_to_list(F)),
-                            lists:member(Vb, tuple_to_list(F))],
-    NeighborIdx.
-
-%%
-%% Helpers
-%%
-
--spec digits(code()) -> binary().
-digits(Code) ->
-    {_, DigitsBin} = parse_code(Code),
-    DigitsBin.
-
-% --- shared XYZ -> code helper (used by encode/2 and compute_neighbors) ---
-
-encode_from_xyz(XYZ, Res) ->
-    encode_at_face(XYZ, Res, nearest_face(XYZ)).
-
-encode_at_face(XYZ, Res, FaceIdx) ->
-    {X, Y} = project(XYZ, FaceIdx),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
-    FaceBin = element(FaceIdx+1, face_bins()),
-    <<FaceBin/binary, $-, Digits/binary>>.
-
-%% Corners and centroid from a single parse_code + sub_decode walk.
-cell_corners_and_centroid(Code) ->
-    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
-    C1 = from_xyz(unproject(RV1, FaceIdx)),
-    C2 = from_xyz(unproject(RV2, FaceIdx)),
-    C3 = from_xyz(unproject(RV3, FaceIdx)),
-    Centroid = from_xyz(unproject(centroid_2d(RV1, RV2, RV3), FaceIdx)),
-    {C1, C2, C3, Centroid}.
 
