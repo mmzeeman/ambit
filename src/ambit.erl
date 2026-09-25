@@ -67,18 +67,7 @@ encode(Coord) ->
 
 -spec encode(latlon(), resolution()) -> code().
 encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
-    XYZ = to_xyz({Lat, Lon}),
-    FaceIdx = nearest_face(XYZ),
-    
-    %% Use the same 2D projection as hexveil
-    {X, Y} = project(XYZ, FaceIdx),
-    
-    %% Get face vertices in the same 2D space
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    
-    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
-    FaceBin = element(FaceIdx+1, face_bins()),
-    <<FaceBin/binary, $-, Digits/binary>>.
+    encode_from_xyz(to_xyz({Lat, Lon}), Res).
 
 -spec parse_code(code()) -> {face_idx(), binary()}.
 parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
@@ -93,7 +82,7 @@ cell_vertices(Code) ->
 
 -spec decode(code()) -> latlon().
 decode(Code) ->
-    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
+    {FaceIdx, { RV1 ,  RV2, RV3}} = cell_vertices(Code),
     
     %% Centroid in 2D space
     {CX, CY} = {(element(1,RV1)+element(1,RV2)+element(1,RV3))/3.0,
@@ -381,33 +370,27 @@ neighbors_2(Code) ->
     All -- [Code | N1].
 
 compute_neighbors(Code, NumDirs) ->
-    {Lat, Lon} = decode(Code),
-    Digits = digits(Code),
+    {FaceIdx, Digits} = parse_code(Code),
     Res = byte_size(Digits),
-    XYZ = to_xyz({Lat, Lon}),
-    FaceIdx = nearest_face(XYZ),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
-    
-    {RV1, RV2, _RV3} = sub_decode(Digits, V1, V2, V3),
-    Side = dist_2d(RV1, RV2),
-    Shift = Side * ?NEIGHBOR_SHIFT_FACTOR, %% Move far enough to hit the next triangle
-    
-    Angles = [I * (2 * math:pi() / NumDirs) || I <- lists:seq(0, NumDirs-1)],
-    {CX, CY} = project(XYZ, FaceIdx),
-    
-    lists:usort([begin
-                     SX = CX + Shift * math:cos(A),
-                     SY = CY + Shift * math:sin(A),
-                     NewXYZ = unproject({SX, SY}, FaceIdx),
-        
-                     %% Optimized encoding using Hint
-                     NewFaceIdx = nearest_face(NewXYZ, FaceIdx),
-                     {NX, NY} = project(NewXYZ, NewFaceIdx),
-                     {V1n, V2n, V3n} = face_verts_2d(NewFaceIdx),
-                     NDigits = sub_encode({NX, NY}, {V1n, V2n, V3n}, Res, <<>>),
-                     FaceBin = element(NewFaceIdx+1, face_bins()),
-                     <<FaceBin/binary, $-, NDigits/binary>>
-                 end || A <- Angles]) -- [Code].
+    {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
+
+    Shift = dist_2d(RV1, RV2) * ?NEIGHBOR_SHIFT_FACTOR,
+    Center2D = centroid_2d(RV1, RV2, RV3),
+
+    Candidates = ring_points_2d(Center2D, Shift, NumDirs),
+
+    lists:usort([encode_from_xyz(unproject(P, FaceIdx), Res, FaceIdx)
+                 || P <- Candidates]) -- [Code].
+
+centroid_2d({X1,Y1}, {X2,Y2}, {X3,Y3}) ->
+    {(X1+X2+X3)/3.0, (Y1+Y2+Y3)/3.0}.
+
+%% NumDirs points evenly spaced on a circle of radius Shift around Center.
+ring_points_2d({CX, CY}, Shift, NumDirs) ->
+    [{CX + Shift * math:cos(A), CY + Shift * math:sin(A)}
+     || I <- lists:seq(0, NumDirs - 1),
+        A <- [I * (2 * math:pi() / NumDirs)]].
 
 dist_2d({X1,Y1}, {X2,Y2}) ->
     DX = X1-X2, DY = Y1-Y2,
@@ -690,4 +673,18 @@ digits(Code) ->
     {_, DigitsBin} = parse_code(Code),
     DigitsBin.
 
+% --- shared XYZ -> code helper (used by encode/2 and compute_neighbors) ---
+
+encode_from_xyz(XYZ, Res) ->
+    encode_at_face(XYZ, Res, nearest_face(XYZ)).
+
+encode_from_xyz(XYZ, Res, FaceHint) ->
+    encode_at_face(XYZ, Res, nearest_face(XYZ, FaceHint)).
+
+encode_at_face(XYZ, Res, FaceIdx) ->
+    {X, Y} = project(XYZ, FaceIdx),
+    {V1, V2, V3} = face_verts_2d(FaceIdx),
+    Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
+    FaceBin = element(FaceIdx+1, face_bins()),
+    <<FaceBin/binary, $-, Digits/binary>>.
 
