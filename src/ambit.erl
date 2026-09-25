@@ -13,6 +13,7 @@
     disk_center/1,
     optimal_level/1,
     parent/1,
+    coarsen/2,
     cell_geometry/1,
     neighbors/1,
     neighbors_2/1,
@@ -305,12 +306,29 @@ great_circle_distance(P1, P2) ->
     end,
     math:acos(Dot) * ?EARTH_RADIUS_M.
 
+%% @doc Reduce Code to the given (coarser or equal) resolution by truncating
+%% its digit string. Res must be between 1 and the code's current resolution.
+-spec coarsen(code(), resolution()) -> code().
+coarsen(<<FaceDigit:1/binary, $-, Digits/binary>> = Code, Res) when is_integer(Res), Res >= 1, Res =< ?MAX_RES ->
+    CurrentRes = byte_size(Digits),
+    case CurrentRes of
+        Res -> Code;
+        _ when Res < CurrentRes ->
+            NewDigits = binary:part(Digits, 0, Res),
+            <<FaceDigit/binary, $-, NewDigits/binary>>;
+        _ ->
+            erlang:error(badarg)
+    end;
+coarsen(_, _) ->
+    erlang:error(badarg).
+
 -spec parent(code()) -> code().
-parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
-    case byte_size(Digits) > 1 of
-        true  -> <<FaceDigits/binary, $-, (binary:part(Digits, 0, byte_size(Digits)-1))/binary>>;
-        false -> <<FaceDigits/binary, $-, Digits/binary>>
-    end.
+parent(<<_:1/binary, $-, Digits/binary>> =Code) when byte_size(Digits) > 0 ->
+    coarsen(Code, byte_size(Digits)-1);
+parent(<<_:1/binary, $->> =Code) ->
+    Code;
+parent(_) ->
+    erlang:error(badarg).
 
 -spec cell_geometry(code()) -> triangle().
 cell_geometry(Code) ->
@@ -386,7 +404,6 @@ compute_neighbors(Code, NumDirs) ->
 centroid_2d({X1,Y1}, {X2,Y2}, {X3,Y3}) ->
     {(X1+X2+X3)/3.0, (Y1+Y2+Y3)/3.0}.
 
-%% NumDirs points evenly spaced on a circle of radius Shift around Center.
 ring_points_2d({CX, CY}, Shift, NumDirs) ->
     [{CX + Shift * math:cos(A), CY + Shift * math:sin(A)}
      || I <- lists:seq(0, NumDirs - 1),
