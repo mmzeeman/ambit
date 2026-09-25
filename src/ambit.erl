@@ -22,16 +22,16 @@
     bounds/2, bounds/3
 ]).
 
--type lat()      :: float().
--type lon()      :: float().
--type latlon()   :: {lat(), lon()}.
--type triangle() :: {latlon(), latlon(), latlon()}.
--type xyz()      :: {float(), float(), float()}.
--type resolution() :: 1..24.
+-type lat()        :: float().
+-type lon()        :: float().
+-type latlon()     :: {lat(), lon()}.
+-type triangle()   :: {latlon(), latlon(), latlon()}.
+-type xyz()        :: {float(), float(), float()}.
+-type resolution() :: 0..24.
 -type face_idx()   :: 0..19.
--type meters() :: number().
--type code() :: <<_:16, _:_*8>>. % code is at least two bytes long.
--type disk_mode() :: corner | centroid.
+-type meters()     :: number().
+-type code()       :: <<_:16, _:_*8>>. % code is at least two bytes long.
+-type disk_mode()  :: corner | centroid.
 
 -type bounds() ::
     {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
@@ -62,7 +62,7 @@ encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
 
 -spec encode(latlon(), resolution()) -> code().
-encode({Lat, Lon}, Res) when Res >= 1, Res =< ?MAX_RES ->
+encode({Lat, Lon}, Res) when Res >= 0, Res =< ?MAX_RES ->
     encode_from_xyz(to_xyz({Lat, Lon}), Res).
 
 -spec parse_code(code()) -> {face_idx(), binary()}.
@@ -104,20 +104,17 @@ orthocenter(Code) ->
 -spec disk(code() | latlon(), meters()) -> [code()].
 disk(Code, DiameterMeters)
   when is_binary(Code), is_number(DiameterMeters), DiameterMeters >= 0 ->
-    case resolution(Code) of
-        Res when Res > 0 ->
-            {Lat, Lon} = decode(Code),
-            disk_from_center({Lat, Lon}, Res, DiameterMeters, corner);
-        _ ->
-            erlang:error(badarg)
-    end;
+    disk(Code, ?DEFAULT_RES, DiameterMeters);
 disk({Lat, Lon}, DiameterMeters)
   when is_number(Lat), is_number(Lon), is_number(DiameterMeters), DiameterMeters >= 0 ->
     disk({Lat, Lon}, ?DEFAULT_RES, DiameterMeters).
 
--spec disk(latlon(), resolution(), meters()) -> [code()].
+-spec disk(code()|latlon(), resolution(), meters()) -> [code()].
 disk({Lat, Lon}, Res, DiameterMeters)
-  when is_number(Lat), is_number(Lon), is_integer(Res), Res > 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
+  when is_number(Lat), is_number(Lon), is_integer(Res), Res >= 0, is_number(DiameterMeters), DiameterMeters >= 0 ->
+    disk_from_center({Lat, Lon}, Res, DiameterMeters, corner);
+disk(Code, Res, DiameterMeters) ->
+    {Lat, Lon} = decode(Code),
     disk_from_center({Lat, Lon}, Res, DiameterMeters, corner).
 
 %% @doc Like `disk/3' but with a mode option to control how triangles are
@@ -176,7 +173,7 @@ shape(GeoJSON, Res) -> shape(GeoJSON, Res, corner).
 %% `centroid' (centroid only).
 -spec shape(GeoJSON :: map(), Res :: pos_integer(), Mode :: disk_mode()) -> [binary()].
 shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
-  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
+  when (is_integer(Res) andalso Res >= 0 andalso Res =< ?MAX_RES)
        andalso (Mode =:= centroid orelse Mode =:= corner) ->
     case Rings of
         [Outer | _] ->
@@ -187,7 +184,7 @@ shape(#{<<"type">> := <<"Polygon">>, <<"coordinates">> := Rings}, Res, Mode)
             erlang:error(badarg)
     end;
 shape(#{<<"type">> := <<"MultiPolygon">>, <<"coordinates">> := Polys}, Res, Mode)
-  when (is_integer(Res) andalso Res >= 1 andalso Res =< ?MAX_RES)
+  when (is_integer(Res) andalso Res >= 0 andalso Res =< ?MAX_RES)
        andalso (Mode =:= centroid orelse Mode =:= corner) ->
     lists:usort(lists:flatmap(
         fun(Rings) ->
@@ -204,7 +201,7 @@ bounds(Bounds, Level) ->
     bounds(Bounds, Level, corner).
 
 bounds(Bounds, Res, Mode)
-  when Res >= 1 andalso Res =< ?MAX_RES
+  when Res >= 0 andalso Res =< ?MAX_RES
        andalso (Mode =:= corner orelse Mode =:= centroid) ->
     NormBounds = normalise_bounds(Bounds),
     Seeds = bounds_seeds(NormBounds, Res),
@@ -366,7 +363,7 @@ great_circle_distance(P1, P2) ->
 %% @doc Reduce Code to the given (coarser or equal) resolution by truncating
 %% its digit string. Res must be between 1 and the code's current resolution.
 -spec coarsen(code(), resolution()) -> code().
-coarsen(<<FaceDigit:1/binary, $-, Digits/binary>> = Code, Res) when is_integer(Res), Res >= 1, Res =< ?MAX_RES ->
+coarsen(<<FaceDigit:1/binary, $-, Digits/binary>> = Code, Res) when is_integer(Res), Res >= 0, Res =< ?MAX_RES ->
     CurrentRes = byte_size(Digits),
     case CurrentRes of
         Res -> Code;

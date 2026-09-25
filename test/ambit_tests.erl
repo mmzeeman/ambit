@@ -286,6 +286,6 @@ bounds_vs_shape_test() ->
 %% bounds badarg validation
 bounds_badarg_test() ->
     ?assertError(badarg, ambit:bounds({1, 2, 3}, 10)),
-    ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 0)),
+    ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, -1)),
     ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 25)),
     ?assertError(badarg, ambit:bounds({1, 2, 3, 4}, 10, invalid_mode)).
