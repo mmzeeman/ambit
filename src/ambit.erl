@@ -54,10 +54,13 @@ parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
 parse_code(_) ->
     erlang:error(badarg).
 
-decode(Code) ->
-    {FaceIdx, DigitsBin} = parse_code(Code),
+cell_vertices(Code) ->
+    {FaceIdx, Digits} = parse_code(Code),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+    {FaceIdx, sub_decode(Digits, V1, V2, V3)}.
+
+decode(Code) ->
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     
     %% Centroid in 2D space
     {CX, CY} = {(element(1,RV1)+element(1,RV2)+element(1,RV3))/3.0,
@@ -77,9 +80,7 @@ resolution(Code) ->
 %% @doc Return the orthocenter of the triangle identified by Code as {Lat, Lon}.
 %% The orthocenter is the intersection of the triangle's three altitudes.
 orthocenter(Code) ->
-    {FaceIdx, DigitsBin} = parse_code(Code),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
     XYZ = unproject({OX, OY}, FaceIdx),
     from_xyz(XYZ).
@@ -289,10 +290,7 @@ parent(<<FaceDigits:1/binary, $-, Digits/binary>>) ->
     end.
 
 cell_geometry(Code) ->
-    {FaceIdx, DigitsBin} = parse_code(Code),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(DigitsBin, V1, V2, V3),
-    
+    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
     [from_xyz(unproject(RV1, FaceIdx)),
      from_xyz(unproject(RV2, FaceIdx)),
      from_xyz(unproject(RV3, FaceIdx))].
