@@ -459,14 +459,10 @@ locate_child(P, {V1, V2, V3} = Verts) ->
             if 
                 V >= 0.5 ->
                     {?CHILD_B, new_verts(?CHILD_B, Verts)};
+                U + V =< 0.5 -> % because W = 1.0 - U - V
+                    {?CHILD_C, new_verts(?CHILD_C, Verts)};
                 true ->
-                    W = 1.0 - U - V,
-                    if 
-                        W >= 0.5 ->
-                            {?CHILD_C, new_verts(?CHILD_C, Verts)};
-                        true ->
-                            {?CHILD_CENTER, new_verts(?CHILD_CENTER, Verts)}
-                    end
+                    {?CHILD_CENTER, new_verts(?CHILD_CENTER, Verts)}
             end
     end.
 
