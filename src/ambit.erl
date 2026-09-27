@@ -232,47 +232,37 @@ shape(_, _, _) ->
 bounds(Bounds, Level) ->
     bounds(Bounds, Level, corner).
 
-bounds(Bounds, Res, Mode)
-  when Res >= 0 andalso Res =< ?MAX_RES
-       andalso (Mode =:= corner orelse Mode =:= centroid) ->
+bounds(Bounds, Res, Mode) ->
     NormBounds = normalise_bounds(Bounds),
-    Seeds = bounds_seeds(NormBounds, Res),
-    flood_fill(Seeds,
-               fun(Code) ->
-                       within_bounds(NormBounds, Code, Mode)
-               end);
-bounds(_, _, _) ->
+    GeoJson = bounds_to_geojson(NormBounds),
+    shape(GeoJson, Res, Mode).
+
+bounds_to_geojson({MinLat, MinLon, MaxLat, MaxLon}) ->
+    #{
+        <<"type">> => <<"Polygon">>,
+        <<"coordinates">> => [[
+            [MinLon, MinLat],
+            [MaxLon, MinLat],
+            [MaxLon, MaxLat],
+            [MinLon, MaxLat],
+            [MinLon, MinLat]
+        ]]
+    }.
+
+normalise_bounds({Lat1, Lon1, Lat2, Lon2})
+  when is_number(Lat1) andalso is_number(Lon1)
+       andalso is_number(Lat2) andalso is_number(Lon2) ->
+    MinLat = min(float(Lat1), float(Lat2)),
+    MaxLat = max(float(Lat1), float(Lat2)),
+
+    NLon1 = normalise_lon(float(Lon1), 0.0),
+    NLon2 = normalise_lon(float(Lon2), 0.0),
+
+    {MinLat, NLon1, MaxLat, NLon2};
+normalise_bounds(_) ->
     erlang:error(badarg).
 
-bounds_seeds({MinLat, MinLon, MaxLat, MaxLon}, Res) ->
-    CenterLat = (MinLat + MaxLat) / 2.0,
-    CenterLon = bounds_center_lon(MinLon, MaxLon),
-    Corners = [{MinLat, MinLon}, {MinLat, MaxLon},
-               {MaxLat, MinLon}, {MaxLat, MaxLon}],
-    lists:usort([encode({CenterLat, CenterLon}, Res) |
-                 [encode(P, Res) || P <- Corners]]).
-
-bounds_center_lon(MinLon, MaxLon) when MinLon =< MaxLon ->
-    (MinLon + MaxLon) / 2.0;
-bounds_center_lon(MinLon, MaxLon) ->
-    %% Range wraps the antimeridian.
-    normalise_lon((MinLon + MaxLon + 360.0) / 2.0, 0.0).
-
-within_bounds(Bounds, Code, corner) ->
-    {C1, C2, C3, Centroid} = cell_corners_and_centroid(Code),
-    in_bounds(C1, Bounds) orelse in_bounds(C2, Bounds)
-    orelse in_bounds(C3, Bounds) orelse in_bounds(Centroid, Bounds);
-within_bounds(Bounds, Code, centroid) ->
-    in_bounds(decode(Code), Bounds).
-
-in_bounds({Lat, Lon}, {MinLat, MinLon, MaxLat, MaxLon}) ->
-    Lat >= MinLat andalso Lat =< MaxLat andalso lon_in_range(Lon, MinLon, MaxLon).
-
-lon_in_range(Lon, MinLon, MaxLon) when MinLon =< MaxLon ->
-    Lon >= MinLon andalso Lon =< MaxLon;
-lon_in_range(Lon, MinLon, MaxLon) -> %% wraps the antimeridian
-    Lon >= MinLon orelse Lon =< MaxLon.
-
+% - filling the shape with neighbor triangles
 
 flood_fill(Seeds, WithinFun) ->
     Visited0 = sets:from_list(Seeds, [{version, 2}]),
@@ -304,19 +294,6 @@ flood_fill_loop(WithinFun, Queue0, Visited, Acc) ->
 
 shape_bfs(Rings, Mode, Seeds) ->
     flood_fill(Seeds, fun(Code) -> within_shape(Rings, Code, Mode) end).
-
-normalise_bounds({Lat1, Lon1, Lat2, Lon2})
-  when is_number(Lat1) andalso is_number(Lon1)
-       andalso is_number(Lat2) andalso is_number(Lon2) ->
-    MinLat = min(float(Lat1), float(Lat2)),
-    MaxLat = max(float(Lat1), float(Lat2)),
-
-    NLon1 = normalise_lon(float(Lon1), 0.0),
-    NLon2 = normalise_lon(float(Lon2), 0.0),
-
-    {MinLat, NLon1, MaxLat, NLon2};
-normalise_bounds(_) ->
-    erlang:error(badarg).
 
 disk_from_center(Center, Res, DiameterMeters, Mode) ->
     %% Center of the disk is always computed at the fixed privacy
@@ -530,8 +507,11 @@ search_faces_fast(_XYZ, [], _FaceCentres, _MaxD, MaxIdx) ->
 search_faces_fast({X,Y,Z}=XYZ, [FaceIdx|Rest], FaceCentres, MaxD, MaxIdx) ->
     {Cx,Cy,Cz} = element(FaceIdx+1, FaceCentres),
     D = X*Cx + Y*Cy + Z*Cz,
-    if D > MaxD -> search_faces_fast(XYZ, Rest, FaceCentres, D, FaceIdx);
-       true     -> search_faces_fast(XYZ, Rest, FaceCentres, MaxD, MaxIdx)
+    if
+        D > MaxD ->
+            search_faces_fast(XYZ, Rest, FaceCentres, D, FaceIdx);
+       true ->
+            search_faces_fast(XYZ, Rest, FaceCentres, MaxD, MaxIdx)
     end.
 
 -spec centroid_2d(xy(), xy(), xy()) -> xy().
@@ -568,20 +548,6 @@ unproject({Qf, Rf}, Face) ->
 -spec mid_2d(xy(), xy()) -> xy().
 mid_2d({X1, Y1}, {X2, Y2}) ->
     {(X1 + X2) / 2.0, (Y1 + Y2) / 2.0}.
-
-%% @doc Compute the orthocenter of a triangle in 2D.
-%% The orthocenter is the intersection of the altitudes.
-%orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
-%    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
-%    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
-%    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
-%    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
-%    Rhs1 = A1 * D1 + A2 * D2,
-%    Rhs2 = B1 * E1 + B2 * E2,
-%    Det  = D1 * E2 - D2 * E1,
-%    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
-%    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
-%    {H1, H2}.
 
 -spec orthocenter_2d(triangle_2d()) -> xy().
 %% The orthocenter is the intersection of the triangle's altitudes.
