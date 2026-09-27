@@ -75,6 +75,25 @@ A code is `<<FaceBase20, "-", Digits/binary>>` where `FaceBase20` is `0..J`
 -define(NEIGHBOR_DIRS, 12).
 -define(NEIGHBOR_SHIFT_FACTOR, 0.9).
 
+%% --- Subdivision child identifiers ---
+%% A triangle splits into 4 sub-triangles (aperture 4): three lie against
+%% a corner, one is the flipped (inverted) middle triangle.
+%%
+%% CHILD_A/B/C are named after the position of their corner in the
+%% (V1, V2, V3) triplet as passed down at that level of the recursion.
+%% This ordering originates from the order in which vertex indices were
+%% written in the Faces list (init_persistent_terms/0) — a choice with
+%% no geometric meaning (not "northernmost", not "lowest index"): which
+%% physical corner V1 is differs per face. CHILD_CENTER is additionally
+%% the mirrored triangle relative to its parent, so "up/down" also flips
+%% after any CHILD_CENTER step.
+-define(CHILD_CENTER, $1).
+-define(CHILD_A,      $2).
+-define(CHILD_B,      $3).
+-define(CHILD_C,      $4).
+
+-compile({inline, [vec_sub/2, cross_2d/2, mid_2d/2, dist_2d/2]}).
+
 -spec encode(latlon()) -> code().
 encode(Coord) ->
     encode(Coord, ?DEFAULT_RES).
@@ -91,8 +110,8 @@ parse_code(_) ->
 
 cell_vertices(Code) ->
     {FaceIdx, Digits} = parse_code(Code),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {FaceIdx, sub_decode(Digits, V1, V2, V3)}.
+    Verts = face_verts_2d(FaceIdx),
+    {FaceIdx, sub_decode(Digits, Verts)}.
 
 %% @doc Return the centroid of the triangle identified by Code.
 -spec decode(code()) -> latlon().
@@ -109,9 +128,9 @@ resolution(Code) ->
 %% The orthocenter is the intersection of the triangle's three altitudes.
 -spec orthocenter(code()) -> latlon().
 orthocenter(Code) ->
-    {FaceIdx, {RV1, RV2, RV3}} = cell_vertices(Code),
-    {OX, OY} = orthocenter_2d(RV1, RV2, RV3),
-    XYZ = unproject({OX, OY}, FaceIdx),
+    {FaceIdx, Verts} = cell_vertices(Code),
+    O = orthocenter_2d(Verts),
+    XYZ = unproject(O, FaceIdx),
     from_xyz(XYZ).
 
 -spec disk(code() | latlon(), meters()) -> [code()].
@@ -406,28 +425,62 @@ cell_geometry(Code) ->
 
 %% --- Recursive Subdivision (2D Local Space) ---
 
+new_verts(?CHILD_A, {V1, V2, V3}) ->
+    {V1, mid_2d(V1, V2), mid_2d(V3, V1)};
+new_verts(?CHILD_B, {V1, V2, V3}) ->
+    {V2, mid_2d(V1, V2), mid_2d(V2, V3)};
+new_verts(?CHILD_C, {V1, V2, V3}) ->
+    {V3, mid_2d(V2, V3), mid_2d(V3, V1)};
+new_verts(?CHILD_CENTER, {V1, V2, V3}) ->
+    {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}.
+
+-spec vec_sub(xy(), xy()) -> xy().
+vec_sub({Ax, Ay}, {Bx, By}) -> {Ax - Bx, Ay - By}.
+
+-spec cross_2d(xy(), xy()) -> float().
+%% 2D cross product (perp dot product) of two vectors: twice the signed
+%% area of the triangle they span from a common origin.
+cross_2d({Ax, Ay}, {Bx, By}) -> Ax*By - Ay*Bx.
+
+-spec locate_child(xy(), triangle_2d()) -> {byte(), triangle_2d()}.
+locate_child(P, {V1, V2, V3} = Verts) ->
+    A  = vec_sub(V1, V3),
+    B  = vec_sub(V2, V3),
+    Dp = vec_sub(P, V3),
+
+    Det = cross_2d(A, B),
+    U = cross_2d(Dp, B) / Det,
+
+    if 
+        U >= 0.5 ->
+            {?CHILD_A, new_verts(?CHILD_A, Verts)};
+        true ->
+            V = cross_2d(A, Dp) / Det,
+            if 
+                V >= 0.5 ->
+                    {?CHILD_B, new_verts(?CHILD_B, Verts)};
+                true ->
+                    W = 1.0 - U - V,
+                    if 
+                        W >= 0.5 ->
+                            {?CHILD_C, new_verts(?CHILD_C, Verts)};
+                        true ->
+                            {?CHILD_CENTER, new_verts(?CHILD_CENTER, Verts)}
+                    end
+            end
+    end.
+
 sub_encode(_P, _Verts, 0, Acc) -> Acc;
-sub_encode(P, {V1, V2, V3}, Res, Acc) ->
-    {U, V, W} = barycentric_2d(P, V1, V2, V3),
-    {Digit, NewVerts} = if
-                            U >= 0.5 -> {$1, {V1, mid_2d(V1, V2), mid_2d(V3, V1)}};
-                            V >= 0.5 -> {$2, {V2, mid_2d(V1, V2), mid_2d(V2, V3)}};
-                            W >= 0.5 -> {$3, {V3, mid_2d(V2, V3), mid_2d(V3, V1)}};
-                            true     -> {$0, {mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1)}}
-                        end,
+sub_encode(P, Verts, Res, Acc) ->
+    {Digit, NewVerts} = locate_child(P, Verts),
     sub_encode(P, NewVerts, Res-1, <<Acc/binary, Digit>>).
 
--spec sub_decode(code(), xy(), xy(), xy()) -> triangle_2d().
-sub_decode(<<$1, Rest/binary>>, V1, V2, V3) ->
-    sub_decode(Rest, V1, mid_2d(V1, V2), mid_2d(V3, V1));
-sub_decode(<<$2, Rest/binary>>, V1, V2, V3) ->
-    sub_decode(Rest, V2, mid_2d(V1, V2), mid_2d(V2, V3));
-sub_decode(<<$3, Rest/binary>>, V1, V2, V3) ->
-    sub_decode(Rest, V3, mid_2d(V2, V3), mid_2d(V3, V1));
-sub_decode(<<$0, Rest/binary>>, V1, V2, V3) ->
-    sub_decode(Rest, mid_2d(V1, V2), mid_2d(V2, V3), mid_2d(V3, V1));
-sub_decode(<<>>, V1, V2, V3) ->
-    {V1, V2, V3}.
+
+-spec sub_decode(code(), triangle_2d()) -> triangle_2d().
+sub_decode(<<Digit, Rest/binary>>, Verts) ->
+    sub_decode(Rest, new_verts(Digit, Verts));
+sub_decode(<<>>, Verts) ->
+    Verts.
 
 %% --- Neighbors logic ---
 
@@ -442,8 +495,8 @@ neighbors_2(Code) ->
 compute_neighbors(Code, NumDirs) ->
     {FaceIdx, Digits} = parse_code(Code),
     Res = byte_size(Digits),
-    {V1, V2, V3} = face_verts_2d(FaceIdx),
-    {RV1, RV2, RV3} = sub_decode(Digits, V1, V2, V3),
+    Verts = face_verts_2d(FaceIdx),
+    {RV1, RV2, RV3} = sub_decode(Digits, Verts),
 
     Shift = dist_2d(RV1, RV2) *?NEIGHBOR_SHIFT_FACTOR,
     Center2D = centroid_2d(RV1, RV2, RV3),
@@ -476,8 +529,6 @@ nearest_face_fast({X,Y,Z}=XYZ, HintFace, HintCentre, FaceCentres) ->
 % nearest_face_fast(XYZ, HintFace, HintCentre, FaceCentres) ->
 % search_faces_fast(XYZ, lists:seq(0,19) -- [HintFace], FaceCentres, D0, HintFace)
 
-
-
 search_faces_fast(_XYZ, [], _FaceCentres, _MaxD, MaxIdx) ->
     MaxIdx;
 search_faces_fast({X,Y,Z}=XYZ, [FaceIdx|Rest], FaceCentres, MaxD, MaxIdx) ->
@@ -500,6 +551,10 @@ dist_2d({X1,Y1}, {X2,Y2}) ->
     DX = X1-X2, DY = Y1-Y2,
     math:sqrt(DX*DX + DY*DY).
 
+-spec dot_2d(xy(), xy()) -> float().
+dot_2d({Ax, Ay}, {Bx, By}) ->
+    Ax*Bx + Ay*By.
+
 %% --- Gnomonic Projection Engine (Identical to hexveil) ---
 
 project({X, Y, Z}, Face) ->
@@ -514,28 +569,40 @@ unproject({Qf, Rf}, Face) ->
           Cy + Qf*Uy + Rf*Vy,
           Cz + Qf*Uz + Rf*Vz}).
 
-barycentric_2d({Px,Py}, {V1x,V1y}, {V2x,V2y}, {V3x,V3y}) ->
-    Det = (V2y-V3y)*(V1x-V3x) + (V3x-V2x)*(V1y-V3y),
-    U = ((V2y-V3y)*(Px-V3x) + (V3x-V2x)*(Py-V3y)) / Det,
-    V = ((V3y-V1y)*(Px-V3x) + (V1x-V3x)*(Py-V3y)) / Det,
-    {U, V, 1.0-U-V}.
-
 -spec mid_2d(xy(), xy()) -> xy().
 mid_2d({X1, Y1}, {X2, Y2}) ->
     {(X1 + X2) / 2.0, (Y1 + Y2) / 2.0}.
 
 %% @doc Compute the orthocenter of a triangle in 2D.
 %% The orthocenter is the intersection of the altitudes.
-orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
-    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
-    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
-    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
-    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
-    Rhs1 = A1 * D1 + A2 * D2,
-    Rhs2 = B1 * E1 + B2 * E2,
-    Det  = D1 * E2 - D2 * E1,
-    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
-    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
+%orthocenter_2d({A1,A2}, {B1,B2}, {C1,C2}) ->
+%    %% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
+%    %% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
+%    D1 = B1 - C1,  D2 = B2 - C2,   %% direction BC
+%    E1 = A1 - C1,  E2 = A2 - C2,   %% direction AC
+%    Rhs1 = A1 * D1 + A2 * D2,
+%    Rhs2 = B1 * E1 + B2 * E2,
+%    Det  = D1 * E2 - D2 * E1,
+%    H1   = (Rhs1 * E2 - Rhs2 * D2) / Det,
+%    H2   = (D1 * Rhs2 - E1 * Rhs1) / Det,
+%    {H1, H2}.
+
+-spec orthocenter_2d(triangle_2d()) -> xy().
+%% The orthocenter is the intersection of the triangle's altitudes.
+%% Altitude from A perpendicular to BC: (H-A)·(B-C) = 0
+%% Altitude from B perpendicular to AC: (H-B)·(A-C) = 0
+orthocenter_2d({A, B, C}) ->
+    D = vec_sub(B, C),   %% direction BC
+    E = vec_sub(A, C),   %% direction AC
+
+    Rhs1 = dot_2d(A, D),
+    Rhs2 = dot_2d(B, E),
+    Det  = cross_2d(D, E),
+
+    {Dx, Dy} = D,
+    {Ex, Ey} = E,
+    H1 = (Rhs1*Ey - Rhs2*Dy) / Det,
+    H2 = (Dx*Rhs2 - Ex*Rhs1) / Det,
     {H1, H2}.
 
 %% --- Standard Geometry ---
