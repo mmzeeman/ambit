@@ -1,12 +1,9 @@
 {application, ambit,
- [{description, "A privacy-preserving hierarchical location encoding"},
-  {vsn, "0.0.1"},
-  {applications,
-   [kernel,
-    stdlib
-   ]},
+ [{description, "Privacy-preserving icosahedral gnomonic aperture-4 triangle grid"},
+  {vsn, "1.0.0"},
+  {applications, [kernel, stdlib]},
   {env,[]},
   {modules, []},
-  {licenses, ["Apache 2.0"]},
+  {licenses, ["Apache-2.0"]},
   {links, [{"Github", "https://github.com/mmzeeman/ambit"}]}
  ]}.
