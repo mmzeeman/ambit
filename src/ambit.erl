@@ -38,32 +38,6 @@ A code is `<<FaceBase20, "-", Digits/binary>>` where `FaceBase20` is `0..J`
     bounds/2, bounds/3
 ]).
 
--type lat()         :: float().
--type lon()         :: float().
--type latlon()      :: {lat(), lon()}.
--type triangle_2d() :: {xy(), xy(), xy()}.
--type triangle()    :: {latlon(), latlon(), latlon()}.
--type xyz()         :: {float(), float(), float()}.
--type xy()          :: {float(), float()}.
--type resolution()  :: 0..24.
--type face_idx()    :: 0..19.
--type meters()      :: number().
--type code()        :: <<_:16, _:_*8>>. % code is at least two bytes long.
--type disk_mode()   :: corner | centroid.
-
--type bounds() ::
-    {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
-
--export_type([
-    code/0,
-    latlon/0,
-    triangle/0,
-    resolution/0,
-    meters/0,
-    disk_mode/0,
-    bounds/0
-]).
-
 -define(D2R, 0.017453292519943295).
 -define(DEFAULT_RES, 14).
 -define(MAX_RES, 24).
@@ -92,6 +66,35 @@ A code is `<<FaceBase20, "-", Digits/binary>>` where `FaceBase20` is `0..J`
 -define(CHILD_B,      $3).
 -define(CHILD_C,      $4).
 
+-type lat()         :: float().
+-type lon()         :: float().
+-type latlon()      :: {lat(), lon()}.
+-type triangle_2d() :: {xy(), xy(), xy()}.
+-type triangle()    :: {latlon(), latlon(), latlon()}.
+-type xyz()         :: {float(), float(), float()}.
+-type xy()          :: {float(), float()}.
+-type resolution()  :: 0..?MAX_RES.
+-type face_idx()    :: 0..(?NR_FACES-1).
+-type meters()      :: number().
+-type face_code()   :: $0..$J.
+-type child_code()  :: ?CHILD_CENTER | ?CHILD_A | ?CHILD_B | ?CHILD_C.
+-type code()        :: <<_:16, _:_*8>>. % code is at least two bytes long.
+-type disk_mode()   :: corner | centroid.
+
+-type bounds() ::
+    {MinLat :: number(), MinLon :: number(), MaxLat :: number(), MaxLon :: number()}.
+
+-export_type([
+    code/0,
+    latlon/0,
+    triangle/0,
+    resolution/0,
+    meters/0,
+    disk_mode/0,
+    bounds/0
+]).
+
+
 -compile({inline, [vec_sub/2, cross_2d/2, mid_2d/2, dist_2d/2]}).
 
 -spec encode(latlon()) -> code().
@@ -101,17 +104,6 @@ encode(Coord) ->
 -spec encode(latlon(), resolution()) -> code().
 encode({Lat, Lon}, Res) when Res >= 0, Res =< ?MAX_RES ->
     encode_from_xyz(to_xyz({Lat, Lon}), Res).
-
--spec parse_code(code()) -> {face_idx(), binary()}.
-parse_code(<<FaceBin:1/binary, $-, DigitsBin/binary>>) ->
-    {binary_to_integer(FaceBin, ?NR_FACES), DigitsBin};
-parse_code(_) ->
-    erlang:error(badarg).
-
-cell_vertices(Code) ->
-    {FaceIdx, Digits} = parse_code(Code),
-    Verts = face_verts_2d(FaceIdx),
-    {FaceIdx, sub_decode(Digits, Verts)}.
 
 %% @doc Return the centroid of the triangle identified by Code.
 -spec decode(code()) -> latlon().
@@ -419,7 +411,7 @@ vec_sub({Ax, Ay}, {Bx, By}) -> {Ax - Bx, Ay - By}.
 %% area of the triangle they span from a common origin.
 cross_2d({Ax, Ay}, {Bx, By}) -> Ax*By - Ay*Bx.
 
--spec locate_child(xy(), triangle_2d()) -> {byte(), triangle_2d()}.
+-spec locate_child(xy(), triangle_2d()) -> {child_code(), triangle_2d()}.
 locate_child(P, {V1, V2, V3} = Verts) ->
     A  = vec_sub(V1, V3),
     B  = vec_sub(V2, V3),
@@ -669,6 +661,69 @@ normalise_lon(VertLon, TestLon) ->
 %% Helpers
 %%
 
+-spec face_code_to_face_idx(face_code()) -> face_idx().
+face_code_to_face_idx($0) -> 0;
+face_code_to_face_idx($1) -> 1;
+face_code_to_face_idx($2) -> 2;
+face_code_to_face_idx($3) -> 3;
+face_code_to_face_idx($4) -> 4;
+face_code_to_face_idx($5) -> 5;
+face_code_to_face_idx($6) -> 6;
+face_code_to_face_idx($7) -> 7;
+face_code_to_face_idx($8) -> 8;
+face_code_to_face_idx($9) -> 9;
+face_code_to_face_idx($A) -> 10;
+face_code_to_face_idx($B) -> 11;
+face_code_to_face_idx($C) -> 12;
+face_code_to_face_idx($D) -> 13;
+face_code_to_face_idx($E) -> 14;
+face_code_to_face_idx($F) -> 15;
+face_code_to_face_idx($G) -> 16;
+face_code_to_face_idx($H) -> 17;
+face_code_to_face_idx($I) -> 18;
+face_code_to_face_idx($J) -> 19;
+face_code_to_face_idx(_) ->
+    erlang:error(badarg).
+
+-spec face_idx_to_face_code(face_idx()) -> face_code().
+face_idx_to_face_code(0) -> $0;
+face_idx_to_face_code(1) -> $1;
+face_idx_to_face_code(2) -> $2;
+face_idx_to_face_code(3) -> $3;
+face_idx_to_face_code(4) -> $4;
+face_idx_to_face_code(5) -> $5;
+face_idx_to_face_code(6) -> $6;
+face_idx_to_face_code(7) -> $7;
+face_idx_to_face_code(8) -> $8;
+face_idx_to_face_code(9) -> $9;
+face_idx_to_face_code(10) -> $A;
+face_idx_to_face_code(11) -> $B;
+face_idx_to_face_code(12) -> $C;
+face_idx_to_face_code(13) -> $D;
+face_idx_to_face_code(14) -> $E;
+face_idx_to_face_code(15) -> $F;
+face_idx_to_face_code(16) -> $G;
+face_idx_to_face_code(17) -> $H;
+face_idx_to_face_code(18) -> $I;
+face_idx_to_face_code(19) -> $J;
+face_idx_to_face_code(_) ->
+    erlang:error(badarg).
+
+
+-spec parse_code(code()) -> {face_idx(), binary()}.
+parse_code(<<FaceCode, $-, DigitsBin/binary>>) ->
+    {face_code_to_face_idx(FaceCode), DigitsBin};
+parse_code(_) ->
+    erlang:error(badarg).
+
+
+-spec cell_vertices(code()) -> {face_idx(), triangle_2d()}.
+cell_vertices(Code) ->
+    {FaceIdx, Digits} = parse_code(Code),
+    Verts = face_verts_2d(FaceIdx),
+    {FaceIdx, sub_decode(Digits, Verts)}.
+
+
 -spec digits(code()) -> binary().
 digits(Code) ->
     {_, DigitsBin} = parse_code(Code),
@@ -683,8 +738,8 @@ encode_at_face(XYZ, Res, FaceIdx) ->
     {X, Y} = project(XYZ, FaceIdx),
     {V1, V2, V3} = face_verts_2d(FaceIdx),
     Digits = sub_encode({X, Y}, {V1, V2, V3}, Res, <<>>),
-    FaceBin = element(FaceIdx+1, face_bins()),
-    <<FaceBin/binary, $-, Digits/binary>>.
+    FaceCode = face_idx_to_face_code(FaceIdx),
+    <<FaceCode, $-, Digits/binary>>.
 
 %% Corners and centroid from a single parse_code + sub_decode walk.
 cell_corners_and_centroid(Code) ->
@@ -699,9 +754,6 @@ cell_corners_and_centroid(Code) ->
 
 face_basis(Face) ->
     element(Face+1, persistent_term:get({?MODULE, face_bases})).
-
-face_bins() ->
-    persistent_term:get({?MODULE, face_bins}).
 
 face_verts_2d(Idx) ->
     element(Idx+1, persistent_term:get({?MODULE, face_verts_2d})).
@@ -740,7 +792,7 @@ init_persistent_terms() ->
         Acc1 = maps:update_with(A, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc),
         Acc2 = maps:update_with(B, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc1),
         maps:update_with(C, fun(L) -> [FaceIdx|L] end, [FaceIdx], Acc2)
-    end, #{}, lists:zip(lists:seq(0,19), Faces)),
+    end, #{}, lists:zip(lists:seq(0, ?NR_FACES-1), Faces)),
 
     FaceVertexNeighbors = list_to_tuple([
         begin
@@ -751,7 +803,7 @@ init_persistent_terms() ->
                 maps:get(C, VertexToFaces)
             ),
             All -- [FaceIdx]
-        end || FaceIdx <- lists:seq(0,19)
+        end || FaceIdx <- lists:seq(0, ?NR_FACES-1)
     ]),
     persistent_term:put({?MODULE, face_vertex_neighbors}, FaceVertexNeighbors),
 
@@ -767,7 +819,7 @@ init_persistent_terms() ->
                  U = unit(UU),
                  V = unit(cross(Centre, U)),
                  {Centre, U, V}
-             end || I <- lists:seq(0, 19)],
+             end || I <- lists:seq(0, ?NR_FACES-1)],
     persistent_term:put({?MODULE, face_bases}, list_to_tuple(Bases)),
 
     %% Pre-calculate 2D projected vertices of each face
@@ -782,10 +834,8 @@ init_persistent_terms() ->
                                    {Px*FUx+Py*FUy+Pz*FUz, Px*FVx+Py*FVy+Pz*FVz}
                                end,
                    {ProjLocal(V1), ProjLocal(V2), ProjLocal(V3)}
-               end || I <- lists:seq(0, 19)],
+               end || I <- lists:seq(0, ?NR_FACES-1)],
     persistent_term:put({?MODULE, face_verts_2d}, list_to_tuple(Verts2D)),
 
-    persistent_term:put({?MODULE, face_bins}, 
-                        list_to_tuple([integer_to_binary(I, 20) || I <- lists:seq(0, 19)])).
-
+    ok.
 
