@@ -1,6 +1,6 @@
 {application, ambit,
  [{description, "Privacy-preserving icosahedral gnomonic aperture-4 triangle grid"},
-  {vsn, "1.0.0"},
+  {vsn, "1.0.1"},
   {applications, [kernel, stdlib]},
   {env,[]},
   {modules, []},
